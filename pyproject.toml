@@ -1,0 +1,50 @@
+[project]
+name = "cq-tdm"
+version = "0.1.0"
+description = "CT Scanner Quality Control Software (Contrôle Qualité Tomodensitométrie)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Luis"}
+]
+
+dependencies = [
+    "pydicom>=2.4.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "PySide6>=6.6.0",
+    "matplotlib>=3.8.0",
+    "reportlab>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-qt>=4.2.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+cq-tdm = "cq_tdm.main:main"
+
+[project.gui-scripts]
+cq-tdm-gui = "cq_tdm.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
