@@ -3,7 +3,19 @@ name: Build Executables
 on:
   release:
     types: [published]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - linux
+          - windows
+          - macos-arm
+          - macos-intel
 
 jobs:
   build:
@@ -13,17 +25,22 @@ jobs:
           - os: ubuntu-22.04
             artifact_name: CQ_TDM
             asset_name: CQ_TDM-linux-x86_64
+            platform_key: linux
           - os: windows-latest
             artifact_name: CQ_TDM.exe
             asset_name: CQ_TDM-windows-x86_64.exe
+            platform_key: windows
           - os: macos-latest
             artifact_name: CQ_TDM
             asset_name: CQ_TDM-macos-arm64
+            platform_key: macos-arm
           - os: macos-15-intel
             artifact_name: CQ_TDM
             asset_name: CQ_TDM-macos-x86_64
+            platform_key: macos-intel
 
     runs-on: ${{ matrix.os }}
+    if: ${{ github.event_name == 'release' || inputs.platform == 'all' || inputs.platform == matrix.platform_key }}
 
     steps:
       - name: Checkout code
