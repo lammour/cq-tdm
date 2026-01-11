@@ -564,7 +564,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CQ TDM - Contrôle Qualité Tomodensitométrie")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(900, 600)
 
         self._current_image: DicomImage | None = None
         self._current_series: DicomSeries | None = None
