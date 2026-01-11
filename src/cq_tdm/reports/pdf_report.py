@@ -517,7 +517,7 @@ class PDFReportGenerator:
         # Content footer (software info)
         story.append(Spacer(1, 30))
         story.append(Paragraph(
-            "Rapport généré par CQ TDM v0.1.0",
+            "Rapport généré par CQ TDM v0.2.0",
             self.styles['Footer']
         ))
 

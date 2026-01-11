@@ -1664,7 +1664,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         from PySide6.QtWidgets import QMessageBox
         about_text = """
 <h2>CQ TDM</h2>
-<p><b>Version 0.1.0</b></p>
+<p><b>Version 0.2.0</b></p>
 
 <p>Logiciel pour le contrôle de qualité interne des tomodensitomètres.</p>
 
