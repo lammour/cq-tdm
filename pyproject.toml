@@ -1,7 +1,7 @@
 [project]
 name = "cq-tdm"
 version = "0.1.0"
-description = "CT Scanner Quality Control Software (Contrôle Qualité Tomodensitométrie)"
+description = "CT Scanner Internal Quality Control Software"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "CeCILL-2.1"}
