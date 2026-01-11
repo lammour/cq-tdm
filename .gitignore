@@ -9,7 +9,7 @@ __pycache__/
 *$py.class
 *.so
 
-# Distribution
+# Distribution / PyInstaller
 build/
 dist/
 *.egg-info/
