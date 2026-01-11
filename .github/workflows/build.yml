@@ -19,6 +19,9 @@ jobs:
           - os: macos-latest
             artifact_name: CQ_TDM
             asset_name: CQ_TDM-macos-arm64
+          - os: macos-13
+            artifact_name: CQ_TDM
+            asset_name: CQ_TDM-macos-x86_64
 
     runs-on: ${{ matrix.os }}
 
