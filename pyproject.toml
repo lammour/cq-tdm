@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "CT Scanner Quality Control Software (Contrôle Qualité Tomodensitométrie)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "CeCILL-2.1"}
 authors = [
     {name = "Luis"}
 ]
