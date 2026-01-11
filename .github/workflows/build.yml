@@ -16,6 +16,9 @@ jobs:
           - os: windows-latest
             artifact_name: CQ_TDM.exe
             asset_name: CQ_TDM-windows-x86_64.exe
+          - os: macos-latest
+            artifact_name: CQ_TDM
+            asset_name: CQ_TDM-macos-arm64
 
     runs-on: ${{ matrix.os }}
 
