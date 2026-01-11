@@ -40,15 +40,36 @@ Basé sur la Décision ANSM du 18/12/2025.
 
 ## Installation
 
-### Prérequis
-- Python 3.12+
-- Environnement virtuel recommandé
+### Méthode recommandée : pip (toutes plateformes)
 
-### Configuration
+```bash
+pip install cq-tdm
+```
+
+Pour créer un raccourci dans le menu Démarrer/Applications, téléchargez et exécutez le script d'installation approprié :
+
+**Windows :**
+1. Téléchargez [`install-windows.bat`](installers/install-windows.bat)
+2. Double-cliquez pour exécuter
+
+**Linux :**
+```bash
+curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-linux.sh
+chmod +x install-linux.sh
+./install-linux.sh
+```
+
+### Méthode alternative : Exécutable
+
+Des exécutables pré-compilés sont disponibles dans les [Releases](https://github.com/lammour/cq-tdm/releases).
+
+> **Note Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
+
+### Installation pour le développement
 
 ```bash
 # Cloner le dépôt
-git clone https://github.com/yourusername/cq-tdm.git
+git clone https://github.com/lammour/cq-tdm.git
 cd cq-tdm
 
 # Créer et activer l'environnement virtuel
