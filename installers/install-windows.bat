@@ -95,14 +95,7 @@ set STARTMENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 set SHORTCUT=%STARTMENU%\CQ TDM.lnk
 
 :: Create shortcut using PowerShell
-powershell -Command ^
-    "$ws = New-Object -ComObject WScript.Shell; ^
-     $s = $ws.CreateShortcut('%SHORTCUT%'); ^
-     $s.TargetPath = '%SCRIPT_PATH%'; ^
-     $s.WorkingDirectory = '%USERPROFILE%'; ^
-     $s.IconLocation = '%ICON_PATH%'; ^
-     $s.Description = 'CT Scanner Internal Quality Control Software'; ^
-     $s.Save()"
+powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = '%SCRIPT_PATH%'; $s.WorkingDirectory = '%USERPROFILE%'; $s.IconLocation = '%ICON_PATH%'; $s.Description = 'CT Scanner Internal Quality Control Software'; $s.Save()"
 
 if exist "%SHORTCUT%" (
     echo [OK] Start Menu shortcut created
@@ -115,14 +108,7 @@ echo.
 set /p DESKTOP_CHOICE="Create Desktop shortcut? (Y/N): "
 if /i "%DESKTOP_CHOICE%"=="Y" (
     set DESKTOP_SHORTCUT=%USERPROFILE%\Desktop\CQ TDM.lnk
-    powershell -Command ^
-        "$ws = New-Object -ComObject WScript.Shell; ^
-         $s = $ws.CreateShortcut('!DESKTOP_SHORTCUT!'); ^
-         $s.TargetPath = '%SCRIPT_PATH%'; ^
-         $s.WorkingDirectory = '%USERPROFILE%'; ^
-         $s.IconLocation = '%ICON_PATH%'; ^
-         $s.Description = 'CT Scanner Internal Quality Control Software'; ^
-         $s.Save()"
+    powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('!DESKTOP_SHORTCUT!'); $s.TargetPath = '%SCRIPT_PATH%'; $s.WorkingDirectory = '%USERPROFILE%'; $s.IconLocation = '%ICON_PATH%'; $s.Description = 'CT Scanner Internal Quality Control Software'; $s.Save()"
     echo [OK] Desktop shortcut created
 )
 

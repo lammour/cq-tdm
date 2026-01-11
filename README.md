@@ -43,8 +43,9 @@ Basé sur la Décision ANSM du 18/12/2025.
 ### Méthode 1 : Script d'installation (recommandée)
 
 **Windows :**
-1. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat)
-2. Double-cliquez pour exécuter
+1. Installez [Python 3.10+](https://www.python.org/downloads/) si ce n'est pas déjà fait (cochez "Add Python to PATH" lors de l'installation)
+2. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat) (clic droit → "Enregistrer le lien sous...")
+3. Double-cliquez sur `install-windows.bat` pour exécuter
 
 **Linux :**
 1. Téléchargez le script d'installation :
