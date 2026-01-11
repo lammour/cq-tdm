@@ -47,17 +47,20 @@ jobs:
       - name: Build executable
         run: pyinstaller cq_tdm.spec
 
+      - name: Rename executable
+        run: mv dist/CQ_TDM dist/CQ_TDM-linux-x86_64
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CQ_TDM-linux-x86_64
-          path: dist/CQ_TDM
+          path: dist/CQ_TDM-linux-x86_64
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CQ_TDM
+          files: dist/CQ_TDM-linux-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,17 +88,20 @@ jobs:
       - name: Build executable
         run: pyinstaller cq_tdm.spec
 
+      - name: Rename executable
+        run: ren dist\CQ_TDM.exe CQ_TDM-windows-x86_64.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CQ_TDM-windows-x86_64.exe
-          path: dist/CQ_TDM.exe
+          path: dist/CQ_TDM-windows-x86_64.exe
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CQ_TDM.exe
+          files: dist/CQ_TDM-windows-x86_64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -123,17 +129,20 @@ jobs:
       - name: Build executable
         run: pyinstaller cq_tdm.spec
 
+      - name: Rename executable
+        run: mv dist/CQ_TDM dist/CQ_TDM-macos-arm64
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CQ_TDM-macos-arm64
-          path: dist/CQ_TDM
+          path: dist/CQ_TDM-macos-arm64
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CQ_TDM
+          files: dist/CQ_TDM-macos-arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -161,16 +170,19 @@ jobs:
       - name: Build executable
         run: pyinstaller cq_tdm.spec
 
+      - name: Rename executable
+        run: mv dist/CQ_TDM dist/CQ_TDM-macos-x86_64
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CQ_TDM-macos-x86_64
-          path: dist/CQ_TDM
+          path: dist/CQ_TDM-macos-x86_64
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CQ_TDM
+          files: dist/CQ_TDM-macos-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
