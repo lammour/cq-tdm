@@ -40,26 +40,71 @@ Basé sur la Décision ANSM du 18/12/2025.
 
 ## Installation
 
-### Méthode recommandée : pip (toutes plateformes)
+### Méthode 1 : Script d'installation (recommandée)
 
+**Windows :**
+1. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat)
+2. Double-cliquez pour exécuter
+
+**Linux :**
+1. Téléchargez le script d'installation :
+   ```bash
+   curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-linux.sh
+   ```
+2. Rendez le script exécutable :
+   ```bash
+   chmod +x install-linux.sh
+   ```
+3. Exécutez le script :
+   ```bash
+   ./install-linux.sh
+   ```
+
+**macOS :**
+1. Téléchargez le script d'installation :
+   ```bash
+   curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-macos.sh
+   ```
+2. Rendez le script exécutable :
+   ```bash
+   chmod +x install-macos.sh
+   ```
+3. Exécutez le script :
+   ```bash
+   ./install-macos.sh
+   ```
+
+Le script installe l'application et crée un raccourci dans le menu Démarrer/Applications (ou ~/Applications sur macOS).
+
+### Méthode 2 : pip / pipx
+
+**Avec pip :**
 ```bash
 pip install cq-tdm
 ```
 
-Pour créer un raccourci dans le menu Démarrer/Applications, téléchargez et exécutez le script d'installation approprié :
+**Avec pipx (recommandé) :**
 
-**Windows :**
-1. Téléchargez [`install-windows.bat`](installers/install-windows.bat)
-2. Double-cliquez pour exécuter
+[pipx](https://pipx.pypa.io/) installe les applications Python dans des environnements isolés, évitant les conflits de dépendances.
 
-**Linux :**
-```bash
-curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-linux.sh
-chmod +x install-linux.sh
-./install-linux.sh
-```
+1. Installez pipx si ce n'est pas déjà fait :
+   ```bash
+   # Linux (Debian/Ubuntu)
+   sudo apt install pipx
 
-### Méthode alternative : Exécutable
+   # macOS (Homebrew)
+   brew install pipx
+
+   # Ou via pip
+   pip install --user pipx
+   pipx ensurepath
+   ```
+2. Installez CQ TDM :
+   ```bash
+   pipx install cq-tdm
+   ```
+
+### Méthode 3 : Téléchargement direct
 
 Des exécutables pré-compilés sont disponibles dans les [Releases](https://github.com/lammour/cq-tdm/releases).
 
