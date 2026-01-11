@@ -16,6 +16,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
     app.setApplicationVersion("0.1.0")
+    app.setStyle("Fusion")
 
     window = MainWindow()
     window.show()
