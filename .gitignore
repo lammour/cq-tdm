@@ -1,0 +1,49 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+tests/output/
+
+# Local settings
+*.local
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Generated reports
+*.pdf
+!references/*.pdf
+
+# Test data (large DICOM files)
+test_data/
+
+# Large reference archives
+*.zip
