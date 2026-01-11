@@ -40,7 +40,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(project_root / 'hooks' / 'runtime_hook.py')],
+    runtime_hooks=[],
     excludes=[
         'tkinter',
     ],
