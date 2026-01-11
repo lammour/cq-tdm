@@ -21,10 +21,33 @@ if errorlevel 1 (
 for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYVER=%%i
 echo [OK] Python %PYVER% found
 
-:: Install/upgrade cq-tdm
+:: Check/install pipx
+pipx --version >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo pipx not found. Installing pipx...
+    pip install --user pipx
+    if errorlevel 1 (
+        echo [ERROR] Failed to install pipx
+        pause
+        exit /b 1
+    )
+    :: Ensure pipx is in PATH
+    python -m pipx ensurepath >nul 2>&1
+    echo [OK] pipx installed
+    echo.
+    echo [NOTE] You may need to restart your terminal for pipx to be in PATH.
+    echo        Continuing with python -m pipx...
+    set PIPX_CMD=python -m pipx
+) else (
+    echo [OK] pipx found
+    set PIPX_CMD=pipx
+)
+
+:: Install cq-tdm with pipx
 echo.
 echo Installing CQ TDM...
-pip install --upgrade cq-tdm
+%PIPX_CMD% install cq-tdm --force
 if errorlevel 1 (
     echo [ERROR] Failed to install CQ TDM
     pause
@@ -32,33 +55,44 @@ if errorlevel 1 (
 )
 echo [OK] CQ TDM installed
 
-:: Find the executable path
-for /f "delims=" %%i in ('python -c "import sys; print(sys.prefix)"') do set PYTHON_PREFIX=%%i
-set SCRIPT_PATH=%PYTHON_PREFIX%\Scripts\cq-tdm.exe
+:: pipx installs to %USERPROFILE%\.local\bin on Windows
+set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm.exe
 
-:: Check if exe exists, if not try user scripts
+:: Check if exe exists
 if not exist "%SCRIPT_PATH%" (
-    for /f "delims=" %%i in ('python -c "import site; print(site.getusersitepackages().replace('site-packages','Scripts'))"') do set SCRIPT_PATH=%%i\cq-tdm.exe
+    :: Try pipx default location
+    for /f "delims=" %%i in ('python -c "import os; print(os.path.expanduser('~'))"') do set HOMEDIR=%%i
+    set SCRIPT_PATH=!HOMEDIR!\.local\bin\cq-tdm.exe
 )
 
 if not exist "%SCRIPT_PATH%" (
     echo [WARNING] Could not find cq-tdm.exe automatically.
-    echo You can still run the app with: python -m cq_tdm
-    pause
-    exit /b 0
+    echo Try restarting your terminal and running 'cq-tdm'
+    set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm.exe
 )
 
-echo [OK] Found executable: %SCRIPT_PATH%
+echo [OK] Executable: %SCRIPT_PATH%
+
+:: Download icon from GitHub
+echo.
+echo Downloading icon...
+set ICON_DIR=%LOCALAPPDATA%\CQ TDM
+set ICON_PATH=%ICON_DIR%\icon.ico
+if not exist "%ICON_DIR%" mkdir "%ICON_DIR%"
+
+powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/lammour/cq-tdm/main/assets/icon.ico' -OutFile '%ICON_PATH%'" >nul 2>&1
+if exist "%ICON_PATH%" (
+    echo [OK] Icon downloaded
+) else (
+    echo [NOTE] Could not download icon, using default
+    set ICON_PATH=%SCRIPT_PATH%
+)
 
 :: Create Start Menu shortcut
 echo.
 echo Creating Start Menu shortcut...
 set STARTMENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 set SHORTCUT=%STARTMENU%\CQ TDM.lnk
-
-:: Icon path (will use exe icon if ico file doesn't exist)
-set ICON_PATH=%~dp0..\assets\icon.ico
-if not exist "%ICON_PATH%" set ICON_PATH=%SCRIPT_PATH%
 
 :: Create shortcut using PowerShell
 powershell -Command ^
@@ -67,7 +101,7 @@ powershell -Command ^
      $s.TargetPath = '%SCRIPT_PATH%'; ^
      $s.WorkingDirectory = '%USERPROFILE%'; ^
      $s.IconLocation = '%ICON_PATH%'; ^
-     $s.Description = 'CT Scanner Quality Control Software'; ^
+     $s.Description = 'CT Scanner Internal Quality Control Software'; ^
      $s.Save()"
 
 if exist "%SHORTCUT%" (
@@ -87,7 +121,7 @@ if /i "%DESKTOP_CHOICE%"=="Y" (
          $s.TargetPath = '%SCRIPT_PATH%'; ^
          $s.WorkingDirectory = '%USERPROFILE%'; ^
          $s.IconLocation = '%ICON_PATH%'; ^
-         $s.Description = 'CT Scanner Quality Control Software'; ^
+         $s.Description = 'CT Scanner Internal Quality Control Software'; ^
          $s.Save()"
     echo [OK] Desktop shortcut created
 )
@@ -100,5 +134,7 @@ echo.
 echo You can now:
 echo   - Find "CQ TDM" in your Start Menu
 echo   - Run "cq-tdm" from the command line
+echo.
+echo To uninstall later: pipx uninstall cq-tdm
 echo.
 pause
