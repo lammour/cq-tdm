@@ -100,20 +100,28 @@ if errorlevel 1 (
 echo [OK] CQ TDM installed
 
 :: Find the installed script location
-:: pip installs scripts to Python's Scripts directory
-for /f "delims=" %%i in ('"%PYTHON%" -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do set SCRIPTS_DIR=%%i
-set SCRIPT_PATH=%SCRIPTS_DIR%\cq-tdm-gui.exe
+set "SCRIPT_PATH="
 
-if not exist "%SCRIPT_PATH%" (
-    :: Try user scripts location
-    for /f "delims=" %%i in ('"%PYTHON%" -m site --user-base"') do set USER_BASE=%%i
-    set SCRIPT_PATH=!USER_BASE!\Scripts\cq-tdm-gui.exe
+:: Use Python to find the Scripts directory (most reliable)
+for /f "delims=" %%i in ('"%PYTHON%" -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do set "SCRIPTS_DIR=%%i"
+echo Looking for executable in: %SCRIPTS_DIR%
+
+if exist "%SCRIPTS_DIR%\cq-tdm-gui.exe" (
+    set "SCRIPT_PATH=%SCRIPTS_DIR%\cq-tdm-gui.exe"
 )
 
-if not exist "%SCRIPT_PATH%" (
+if not defined SCRIPT_PATH (
+    :: Try 'where' in case it's in PATH
+    for /f "delims=" %%i in ('where cq-tdm-gui.exe 2^>nul') do (
+        if not defined SCRIPT_PATH set "SCRIPT_PATH=%%i"
+    )
+)
+
+if not defined SCRIPT_PATH (
     echo [WARNING] Could not find cq-tdm-gui.exe automatically.
-    echo Try running 'cq-tdm-gui' from the command line.
-    set SCRIPT_PATH=%SCRIPTS_DIR%\cq-tdm-gui.exe
+    echo Shortcuts will not be created.
+    echo You can still run 'cq-tdm-gui' from the command line.
+    goto :skip_shortcuts
 )
 
 echo [OK] Executable: %SCRIPT_PATH%
@@ -165,6 +173,7 @@ if exist "%DESKTOP_SHORTCUT%" (
     )
 )
 
+:skip_shortcuts
 echo.
 echo ========================================
 echo   Installation complete!
