@@ -1,6 +1,12 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+:: Ensure we always pause on exit so user can see errors
+if "%~1"=="" (
+    cmd /k "%~f0" run
+    exit /b
+)
+
 echo.
 echo ========================================
 echo   CQ TDM Installer for Windows
