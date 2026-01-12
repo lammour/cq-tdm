@@ -335,6 +335,7 @@ class PDFReportGenerator:
         reference_nps_freq: Optional[float] = None,
         logo_path: Optional[str] = None,
         logo_scale: float = 1.0,
+        notes: str = "",
     ):
         self.hospital_name = hospital_name
         self.hospital_location = hospital_location
@@ -346,6 +347,7 @@ class PDFReportGenerator:
         self.reference_nps_freq = reference_nps_freq
         self.logo_path = logo_path
         self.logo_scale = logo_scale
+        self.notes = notes
         self.styles = getSampleStyleSheet()
         self._setup_styles()
 
@@ -553,6 +555,10 @@ class PDFReportGenerator:
 
         # Artifact inspection results
         story.append(KeepTogether(self._build_artifact_section(image, artifact_result)))
+
+        # Notes section (if any)
+        if self.notes and self.notes.strip():
+            story.append(KeepTogether(self._build_notes_section()))
 
         # Content footer (software info)
         story.append(Spacer(1, 30))
@@ -799,6 +805,75 @@ class PDFReportGenerator:
             elements.append(Paragraph(f"Résultat : {status_text}", self.styles[status_style]))
             if artifact_result.artifacts_present:
                 elements.append(Paragraph(f"<i>→ {_action_text(False, False)}</i>", self.styles[status_style]))
+
+        elements.append(Spacer(1, 8))
+        return elements
+
+    def _build_notes_section(self) -> list:
+        """Build notes section with simplified markdown rendering."""
+        import re
+
+        elements = []
+
+        elements.append(Paragraph("Notes", self.styles['SectionTitle']))
+
+        # Parse simplified markdown and convert to paragraphs
+        lines = self.notes.split('\n')
+        current_list_items = []
+
+        def flush_list():
+            """Flush accumulated list items into a table."""
+            nonlocal current_list_items
+            if current_list_items:
+                # Create a bullet list using a table
+                list_data = [[f"• {item}"] for item in current_list_items]
+                list_table = Table(list_data, colWidths=[14 * cm])
+                list_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                    ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ]))
+                elements.append(list_table)
+                current_list_items = []
+
+        def parse_inline_formatting(text: str) -> str:
+            """Convert **bold** and *italic* to HTML tags."""
+            # Bold: **text**
+            text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+            # Italic: *text* (but not inside bold)
+            text = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<i>\1</i>', text)
+            return text
+
+        for line in lines:
+            stripped = line.strip()
+
+            if not stripped:
+                flush_list()
+                elements.append(Spacer(1, 4))
+                continue
+
+            # Check for heading (## Title)
+            if stripped.startswith('## '):
+                flush_list()
+                heading_text = parse_inline_formatting(stripped[3:])
+                elements.append(Paragraph(heading_text, self.styles['SubSection']))
+                continue
+
+            # Check for list item (- item)
+            if stripped.startswith('- '):
+                item_text = parse_inline_formatting(stripped[2:])
+                current_list_items.append(item_text)
+                continue
+
+            # Regular paragraph
+            flush_list()
+            para_text = parse_inline_formatting(stripped)
+            elements.append(Paragraph(para_text, self.styles['InfoText']))
+
+        # Flush any remaining list items
+        flush_list()
 
         elements.append(Spacer(1, 8))
         return elements
@@ -1182,6 +1257,7 @@ def generate_pdf_report(
     nps_image: Optional[DicomImage] = None,
     logo_path: Optional[str] = None,
     logo_scale: float = 1.0,
+    notes: str = "",
 ):
     """
     Convenience function to generate a PDF report.
@@ -1203,6 +1279,7 @@ def generate_pdf_report(
         nps_image: DicomImage for NPS ROI visualization (middle of NPS range).
         logo_path: Path to logo image (PNG or JPG) to display at the top of the report.
         logo_scale: Logo scale factor (1.0 = 100%).
+        notes: User notes in simplified markdown format.
     """
     generator = PDFReportGenerator(
         hospital_name=hospital_name,
@@ -1215,5 +1292,6 @@ def generate_pdf_report(
         reference_nps_freq=reference_nps_freq,
         logo_path=logo_path,
         logo_scale=logo_scale,
+        notes=notes,
     )
     generator.generate_report(output_path, image, water_results, nps_results, artifact_result, nps_image)
