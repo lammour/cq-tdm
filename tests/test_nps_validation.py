@@ -617,3 +617,381 @@ class TestNPSValidation:
             assert correlation > 0.7, (
                 f"{series_name}: Spectrum correlation {correlation:.4f} below 0.7"
             )
+
+
+# ---------------------------------------------------------------------------
+# Combined Validation Figure for README
+# ---------------------------------------------------------------------------
+
+
+def generate_combined_validation_figure(test_data_dir: Path, output_dir: Path) -> None:
+    """Generate a single combined figure comparing all series for README.
+
+    Creates a figure with:
+    - 5 NPS spectrum plots (one per series): Reference vs Auto ROI
+    - A summary table with mean frequency comparison
+    """
+    from cq_tdm.core.dicom_loader import load_dicom_folder
+    from cq_tdm.core.nps import analyze_nps
+
+    # Series to process
+    series_list = [
+        ("Serie_1", "S1"),
+        ("Serie_2", "S2"),
+        ("Serie_3a", "S3a"),
+        ("Serie_3b", "S3b"),
+        ("Serie_4", "S4"),
+    ]
+
+    # Collect results
+    results_data = []
+
+    # Create figure: 2 rows x 3 cols (5 plots + 1 table)
+    fig = plt.figure(figsize=(15, 10))
+
+    for idx, (series_name, dicom_subdir) in enumerate(series_list):
+        series_dir = test_data_dir / series_name
+        dicom_dir = series_dir / dicom_subdir
+
+        if not dicom_dir.exists():
+            print(f"Skipping {series_name}: directory not found")
+            continue
+
+        # Load reference data
+        ref_config = load_roi_config(series_dir)
+        ref_results = parse_nps_results(dicom_dir / "NPS_Results.txt")
+        ref_1d = parse_nps_1d_csv(dicom_dir / "NPS1D.csv")
+
+        # Load DICOM series
+        series = load_dicom_folder(dicom_dir)
+
+        # Find slice range
+        slice_range = find_slice_range_by_location(
+            series, ref_config.slice_start_mm, ref_config.slice_end_mm
+        )
+
+        # Run NPS with AUTO ROI detection
+        result = analyze_nps(
+            series,
+            roi_size=64,
+            slice_range=slice_range,
+            roi_positions=None,
+        )
+
+        # Calculate error
+        error_pct = compute_relative_error(
+            result.mean_frequency, ref_results.average_frequency
+        )
+
+        results_data.append({
+            "series": series_name,
+            "ref_freq": ref_results.average_frequency,
+            "our_freq": result.mean_frequency,
+            "error": error_pct,
+        })
+
+        # Create subplot (positions 1-5)
+        ax = fig.add_subplot(2, 3, idx + 1)
+
+        # Plot reference (ANSM) - fitted curve only
+        ax.plot(
+            ref_1d.frequencies,
+            ref_1d.nps_1d_fit,
+            "b-",
+            linewidth=2,
+            label="ANSM (reference)",
+        )
+
+        # Plot our result (CQ-TDM auto ROI) - fitted curve only
+        ax.plot(
+            result.frequencies_radial,
+            result.nps_radial_fit,
+            "r-",
+            linewidth=2,
+            label="CQ TDM (auto ROI)",
+        )
+
+        # Mark mean frequencies
+        ax.axvline(
+            ref_results.average_frequency,
+            color="blue",
+            linestyle="--",
+            linewidth=1,
+            alpha=0.7,
+        )
+        ax.axvline(
+            result.mean_frequency,
+            color="red",
+            linestyle="--",
+            linewidth=1,
+            alpha=0.7,
+        )
+
+        ax.set_xlabel("Frequency (mm⁻¹)")
+        ax.set_ylabel("NPS (HU² · mm²)")
+        ax.set_title(f"{series_name} (error: {error_pct:.1f}%)")
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, max(ref_1d.frequencies.max(), result.frequencies_radial.max()) * 1.05)
+
+    # Create summary table in position 6
+    ax_table = fig.add_subplot(2, 3, 6)
+    ax_table.axis("off")
+
+    # Build table data
+    table_data = [["Series", "Reference\n(mm⁻¹)", "CQ TDM\n(mm⁻¹)", "Error\n(%)", "Status"]]
+    for r in results_data:
+        status = "✓ PASS" if r["error"] <= 10 else "✗ FAIL"
+        table_data.append([
+            r["series"],
+            f"{r['ref_freq']:.4f}",
+            f"{r['our_freq']:.4f}",
+            f"{r['error']:.2f}",
+            status,
+        ])
+
+    # Add summary row
+    avg_error = sum(r["error"] for r in results_data) / len(results_data) if results_data else 0
+    table_data.append(["Average", "-", "-", f"{avg_error:.2f}", ""])
+
+    table = ax_table.table(
+        cellText=table_data,
+        loc="center",
+        cellLoc="center",
+        colWidths=[0.2, 0.2, 0.2, 0.15, 0.15],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.2, 1.8)
+
+    # Style header row
+    for j in range(5):
+        table[(0, j)].set_facecolor("#4472C4")
+        table[(0, j)].set_text_props(color="white", fontweight="bold")
+
+    # Style status column
+    for i, r in enumerate(results_data, 1):
+        if r["error"] <= 10:
+            table[(i, 4)].set_facecolor("#C6EFCE")
+        else:
+            table[(i, 4)].set_facecolor("#FFC7CE")
+
+    ax_table.set_title("Mean Frequency Comparison\n(ANSM tolerance: ≤10%)", fontsize=11, fontweight="bold")
+
+    plt.suptitle("NPS Validation: CQ TDM vs ANSM Reference", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+
+    output_path = output_dir / "nps_validation_combined.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"\nCombined validation figure saved to: {output_path}")
+    return output_path
+
+
+def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
+    """Generate a combined figure comparing ROI positions for all series.
+
+    Creates a figure with 5 subplots showing reference vs auto-detected ROI positions,
+    including detected phantom center and perimeter.
+    """
+    from cq_tdm.core.dicom_loader import (
+        load_dicom_folder,
+        detect_phantom_center,
+        estimate_phantom_diameter,
+    )
+    from cq_tdm.core.nps import analyze_nps
+
+    # Series to process
+    series_list = [
+        ("Serie_1", "S1"),
+        ("Serie_2", "S2"),
+        ("Serie_3a", "S3a"),
+        ("Serie_3b", "S3b"),
+        ("Serie_4", "S4"),
+    ]
+
+    # Create figure: 2 rows x 3 cols (5 plots + 1 legend)
+    fig = plt.figure(figsize=(15, 10))
+
+    for idx, (series_name, dicom_subdir) in enumerate(series_list):
+        series_dir = test_data_dir / series_name
+        dicom_dir = series_dir / dicom_subdir
+
+        if not dicom_dir.exists():
+            print(f"Skipping {series_name}: directory not found")
+            continue
+
+        # Load reference ROI config
+        ref_config = load_roi_config(series_dir)
+
+        # Load DICOM series
+        series = load_dicom_folder(dicom_dir)
+
+        # Find slice range
+        slice_range = find_slice_range_by_location(
+            series, ref_config.slice_start_mm, ref_config.slice_end_mm
+        )
+
+        # Run NPS with AUTO ROI detection
+        result = analyze_nps(
+            series,
+            roi_size=64,
+            slice_range=slice_range,
+            roi_positions=None,
+        )
+
+        # Get middle slice for visualization
+        middle_idx = len(series.images) // 2
+        middle_image = series.images[middle_idx]
+        pixel_array = middle_image.pixel_array
+
+        # Detect phantom center and diameter
+        center_row, center_col = detect_phantom_center(middle_image)
+        diameter_pixels = estimate_phantom_diameter(middle_image, (center_row, center_col))
+        radius_pixels = diameter_pixels / 2
+
+        # Create subplot
+        ax = fig.add_subplot(2, 3, idx + 1)
+
+        # Display image with appropriate window (water phantom)
+        ax.imshow(pixel_array, cmap="gray", vmin=-100, vmax=100)
+
+        # Draw detected phantom perimeter (circle)
+        phantom_circle = plt.Circle(
+            (center_col, center_row),
+            radius_pixels,
+            fill=False,
+            edgecolor="lime",
+            linewidth=2,
+            linestyle="-",
+        )
+        ax.add_patch(phantom_circle)
+
+        # Draw detected phantom center (crosshair)
+        crosshair_size = 15
+        ax.plot(
+            [center_col - crosshair_size, center_col + crosshair_size],
+            [center_row, center_row],
+            color="lime",
+            linewidth=2,
+        )
+        ax.plot(
+            [center_col, center_col],
+            [center_row - crosshair_size, center_row + crosshair_size],
+            color="lime",
+            linewidth=2,
+        )
+
+        # Plot reference ROIs (iQMetrix) in blue
+        for i, roi in enumerate(ref_config.rois):
+            rect = plt.Rectangle(
+                (roi.x - roi.side_square // 2, roi.y - roi.side_square // 2),
+                roi.side_square,
+                roi.side_square,
+                fill=False,
+                edgecolor="blue",
+                linewidth=2,
+                linestyle="-",
+            )
+            ax.add_patch(rect)
+
+        # Plot our auto-detected ROIs in red
+        for i, roi in enumerate(result.roi_config.rois):
+            rect = plt.Rectangle(
+                (roi.x - roi.side_square // 2, roi.y - roi.side_square // 2),
+                roi.side_square,
+                roi.side_square,
+                fill=False,
+                edgecolor="red",
+                linewidth=2,
+                linestyle="--",
+            )
+            ax.add_patch(rect)
+
+        ax.set_title(f"{series_name}")
+        ax.axis("off")
+
+    # Create legend in position 6
+    ax_legend = fig.add_subplot(2, 3, 6)
+    ax_legend.axis("off")
+
+    # Create legend patches
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Patch(facecolor="none", edgecolor="blue", linewidth=2, linestyle="-",
+              label="ANSM (reference)"),
+        Patch(facecolor="none", edgecolor="red", linewidth=2, linestyle="--",
+              label="CQ TDM (auto-detected)"),
+        Patch(facecolor="none", edgecolor="lime", linewidth=2, linestyle="-",
+              label="Detected phantom perimeter"),
+        Line2D([0], [0], color="lime", linewidth=2, marker="+", markersize=10,
+               linestyle="none", label="Detected phantom center"),
+    ]
+
+    ax_legend.legend(
+        handles=legend_elements,
+        loc="center",
+        fontsize=11,
+        frameon=True,
+        fancybox=True,
+        shadow=True,
+    )
+
+    # Add explanation text
+    explanation = """
+    ROI Position Comparison
+
+    Each subplot shows a middle slice from
+    the water phantom DICOM series.
+
+    Green circle: Auto-detected phantom
+    perimeter from CQ TDM
+
+    Green cross: Auto-detected phantom center
+
+    Blue squares: Reference ROI positions
+    from ANSM validation dataset
+
+    Red dashed squares: Auto-detected ROI
+    positions from CQ TDM algorithm
+    """
+
+    ax_legend.text(
+        0.5, 0.25,
+        explanation,
+        transform=ax_legend.transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        horizontalalignment="center",
+        fontfamily="monospace",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
+
+    plt.suptitle("NPS ROI Position Comparison: CQ TDM vs ANSM Reference",
+                 fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+
+    output_path = output_dir / "nps_roi_positions_combined.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"\nCombined ROI position figure saved to: {output_path}")
+    return output_path
+
+
+class TestCombinedValidation:
+    """Test class for generating combined validation figures."""
+
+    def test_generate_combined_figure(self, test_data_dir: Path, output_dir: Path):
+        """Generate combined validation figure for README."""
+        output_path = generate_combined_validation_figure(test_data_dir, output_dir)
+        assert output_path.exists(), f"Combined figure not created: {output_path}"
+
+    def test_generate_combined_roi_figure(self, test_data_dir: Path, output_dir: Path):
+        """Generate combined ROI position comparison figure for README."""
+        output_path = generate_combined_roi_figure(test_data_dir, output_dir)
+        assert output_path.exists(), f"Combined ROI figure not created: {output_path}"

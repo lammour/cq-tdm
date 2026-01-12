@@ -1,10 +1,10 @@
 # CQ TDM
 
-Logiciel d'analyse des images du fantôme d'eau pour le contrôle qualité des tomodensitomètres.
+Logiciel d'analyse des images de fantômes d'eau pour le contrôle qualité des tomodensitomètres.
 
 ## Présentation
 
-CQ TDM (ou cq-tdm) analyse les images DICOM des fantômes d'eau pour évaluer le nombre CT de l'eau, l'uniformité, la magnitude et le spectre de puissance du bruit et les artefacts. Le logiciel a pour objectif de suivre la décision ANSM du 18/12/2025 fixant les modalités du contrôle de qualité des tomodensitomètres. Le calcul du spectre de puissance du bruit a pour objectif de se rapprocher au plus près de la méthode utilisée par [IQMetrix-CT](https://github.com/SFPM/iQMetrix-CT) et des résultats de référence disponibles sur le site de l'ANSM.
+CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'eau pour évaluer le nombre CT de l'eau, l'uniformité, la magnitude du bruit, le spectre de puissance du bruit et les artefacts. Ce logiciel suit la décision ANSM du 18/12/2025 fixant les modalités du contrôle de qualité des tomodensitomètres.
 
 ![CQ TDM - Capture d'écran](docs/screenshot.png)
 
@@ -27,6 +27,7 @@ CQ TDM (ou cq-tdm) analyse les images DICOM des fantômes d'eau pour évaluer le
   - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB) et des informations d'identification
   - Détection automatique des appareils enregistrés
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
+  
 
 ## Cadre réglementaire
 
@@ -34,13 +35,23 @@ CQ TDM (ou cq-tdm) analyse les images DICOM des fantômes d'eau pour évaluer le
 
 L'auteur s'efforce à ne pas changer les méthodes de calcul entre chaque version majeure du logiciel. Une attention à la reproductibilité des résultats doit tout de même être maintenue par l'utilisateur à chaque mise à jour.
 
-Un protocole de test automatisé est disponible avec le code source du logiciel, celui-ci compare les résultats du calcul de la fréquence moyenne du SPB avec les références fournies par l'ANSM :
+
+## Spectre de puissance du bruit (SPB)
+
+La décision ANSM ne précise pas les détails de la méthode de calcul du SPB. CQ TDM a pour objectif de se rapprocher au plus près de la méthode utilisée par [IQMetrix-CT](https://github.com/SFPM/iQMetrix-CT) et des résultats de référence disponibles sur le site de l'ANSM.
+
+Un protocole de test automatisé est disponible avec le code source du logiciel. Il compare les résultats du calcul de la fréquence moyenne du SPB avec les références fournies par l'ANSM. Il peut être exécuté avec pytest : 
 
 ```bash
 # Lancer les tests de validation SPB
 pytest tests/test_nps_validation.py -v
 ```
 
+Les résultats de la version actuelle sont présentés ci-dessous :
+
+![NPS Validation: CQ TDM vs ANSM Reference](docs/nps_validation_combined.png)
+
+![NPS ROI Position Comparison: CQ TDM vs ANSM Reference](docs/nps_roi_positions_combined.png)
 
 ## Installation
 
