@@ -18,33 +18,28 @@ if not errorlevel 1 (
 )
 
 :: Check common install locations (newest first)
-for %%V in (314 313 312 311 310) do (
-    if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" (
-        set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
-        goto :python_found
-    )
-    if exist "C:\Program Files\Python%%V\python.exe" (
-        set "PYTHON=C:\Program Files\Python%%V\python.exe"
-        goto :python_found
-    )
-)
+call :find_python
+if defined PYTHON goto :python_found
 
 :: Python not found, attempt to install
 echo Python not found. Attempting to install Python 3.14...
 echo.
 
 :: Try winget first (Windows 10/11)
+set "INSTALL_SUCCESS=0"
 winget --version >nul 2>&1
-if not errorlevel 1 (
-    echo Installing Python via winget...
-    winget install Python.Python.3.14 --silent --accept-package-agreements --accept-source-agreements
-    if not errorlevel 1 (
-        set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
-        goto :python_found
-    )
-    echo [WARNING] winget install failed, trying direct download...
-)
+if errorlevel 1 goto :try_direct_download
 
+echo Installing Python via winget...
+winget install Python.Python.3.14 --silent --accept-package-agreements --accept-source-agreements
+if errorlevel 1 (
+    echo [WARNING] winget install failed, trying direct download...
+    goto :try_direct_download
+)
+set "INSTALL_SUCCESS=1"
+goto :check_installed
+
+:try_direct_download
 :: Fallback: download installer directly
 echo Downloading Python installer...
 set "PYTHON_INSTALLER=%TEMP%\python-installer.exe"
@@ -67,19 +62,20 @@ if errorlevel 1 (
     exit /b 1
 )
 del "%PYTHON_INSTALLER%" >nul 2>&1
+set "INSTALL_SUCCESS=1"
 
-:: Set path to newly installed Python
-set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
-
-:: Verify installation
-if not exist "%PYTHON%" (
-    echo [ERROR] Python installation completed but executable not found.
-    echo Please install Python 3.10+ manually from https://python.org
-    pause
-    exit /b 1
+:check_installed
+:: Re-check for Python after installation
+call :find_python
+if defined PYTHON (
+    echo [OK] Python installed successfully
+    goto :python_found
 )
 
-echo [OK] Python installed successfully
+echo [ERROR] Python installation completed but executable not found.
+echo Please install Python 3.10+ manually from https://python.org
+pause
+exit /b 1
 
 :python_found
 :: Get Python version
@@ -199,3 +195,49 @@ echo.
 echo To uninstall later: pipx uninstall cq-tdm
 echo.
 pause
+goto :eof
+
+:: Subroutine to find Python in common locations
+:find_python
+set "PYTHON="
+if exist "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" (
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+    goto :eof
+)
+if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" (
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+    goto :eof
+)
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    goto :eof
+)
+if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    goto :eof
+)
+if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" (
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    goto :eof
+)
+if exist "C:\Program Files\Python314\python.exe" (
+    set "PYTHON=C:\Program Files\Python314\python.exe"
+    goto :eof
+)
+if exist "C:\Program Files\Python313\python.exe" (
+    set "PYTHON=C:\Program Files\Python313\python.exe"
+    goto :eof
+)
+if exist "C:\Program Files\Python312\python.exe" (
+    set "PYTHON=C:\Program Files\Python312\python.exe"
+    goto :eof
+)
+if exist "C:\Program Files\Python311\python.exe" (
+    set "PYTHON=C:\Program Files\Python311\python.exe"
+    goto :eof
+)
+if exist "C:\Program Files\Python310\python.exe" (
+    set "PYTHON=C:\Program Files\Python310\python.exe"
+    goto :eof
+)
+goto :eof
