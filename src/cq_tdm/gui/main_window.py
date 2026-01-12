@@ -47,7 +47,7 @@ from ..core import (
     format_fr,
     parse_float_fr,
 )
-from ..reports import generate_pdf_report, ArtifactInspectionResult
+from ..reports import generate_pdf_report, generate_report_filename, ArtifactInspectionResult
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 
@@ -1290,9 +1290,11 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             QMessageBox.warning(self, "Attention", "Aucune analyse effectuée.")
             return
 
-        # Default filename with date
-        from datetime import datetime
-        default_name = f"rapport_cq_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        # Default filename with device info and date
+        default_name = generate_report_filename(
+            device_name=self._device_name,
+            inventory_number=self._inventory_number,
+        )
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,

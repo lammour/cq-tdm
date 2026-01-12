@@ -222,6 +222,41 @@ def _generate_nps_roi_image(
     return buffer
 
 
+def _generate_artifact_image(
+    image: DicomImage,
+    window: int = 80,
+    level: int = 0,
+) -> BytesIO:
+    """Generate image with ANSM artifact inspection window settings as PNG.
+
+    ANSM requires: Window center (L) = 0 HU, Window width (W) = 80 HU
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    # Apply ANSM window/level for artifact inspection
+    min_val = level - window / 2  # -40 HU
+    max_val = level + window / 2  # +40 HU
+    display_array = np.clip(image.pixel_array, min_val, max_val)
+    display_array = ((display_array - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+
+    fig, ax = plt.subplots(figsize=(5, 5), dpi=120)
+    ax.imshow(display_array, cmap='gray', aspect='equal')
+
+    ax.set_title('Inspection artéfacts (L=0, W=80 HU)', fontsize=9, fontweight='bold')
+    ax.axis('off')
+
+    plt.tight_layout()
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format='PNG', bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buffer.seek(0)
+
+    return buffer
+
+
 def _create_status_badge(status_text: str, status_color: colors.Color) -> Table:
     """Create a colored status badge as a small table."""
     # Always use white text for badges
@@ -261,16 +296,21 @@ def _draw_footer(canvas_obj: canvas.Canvas, doc, page_num: int):
     canvas_obj.restoreState()
 
 
-def _draw_header(canvas_obj: canvas.Canvas, doc, hospital_name: str, device_name: str, control_datetime: str):
-    """Draw header with hospital name, device name, and control date."""
+def _draw_header(canvas_obj: canvas.Canvas, doc, hospital_name: str, device_name: str, inventory_number: str, control_datetime: str):
+    """Draw header with hospital name, device name with inventory number, and control date."""
     canvas_obj.saveState()
     canvas_obj.setFont('Helvetica', 8)
     canvas_obj.setFillColor(colors.Color(0.4, 0.4, 0.4))
 
+    # Build device display string with inventory number
+    device_display = device_name or "—"
+    if inventory_number:
+        device_display = f"{device_display} ({inventory_number})"
+
     # Header line at top (use placeholders for empty values)
     y_pos = A4[1] - 1.2 * cm
     canvas_obj.drawString(2 * cm, y_pos, hospital_name or "—")
-    canvas_obj.drawCentredString(A4[0] / 2, y_pos, device_name or "—")
+    canvas_obj.drawCentredString(A4[0] / 2, y_pos, device_display)
     canvas_obj.drawRightString(A4[0] - 2 * cm, y_pos, control_datetime)
 
     # Separator line
@@ -486,6 +526,9 @@ class PDFReportGenerator:
             ))
         story.append(Spacer(1, 16))
 
+        # Summary section at the beginning
+        story.append(KeepTogether(self._build_summary_section(water_results, nps_results, artifact_result)))
+
         # Equipment info section
         story.append(KeepTogether(self._build_equipment_section(image)))
 
@@ -509,15 +552,12 @@ class PDFReportGenerator:
             story.append(KeepTogether(self._build_nps_results_section(nps_results)))
 
         # Artifact inspection results
-        story.append(KeepTogether(self._build_artifact_section(artifact_result)))
-
-        # Summary section
-        story.append(KeepTogether(self._build_summary_section(water_results, nps_results, artifact_result)))
+        story.append(KeepTogether(self._build_artifact_section(image, artifact_result)))
 
         # Content footer (software info)
         story.append(Spacer(1, 30))
         story.append(Paragraph(
-            "Rapport généré par CQ TDM v0.2.0",
+            "Rapport généré par CQ TDM v0.2.3",
             self.styles['Footer']
         ))
 
@@ -532,7 +572,7 @@ class PDFReportGenerator:
         def on_later_pages(canvas_obj, doc):
             """Subsequent pages: header and footer."""
             page_counter[0] += 1
-            _draw_header(canvas_obj, doc, self.hospital_name, self.device_name, control_datetime)
+            _draw_header(canvas_obj, doc, self.hospital_name, self.device_name, self.inventory_number, control_datetime)
             _draw_footer(canvas_obj, doc, page_counter[0])
 
         doc.build(story, onFirstPage=on_first_page, onLaterPages=on_later_pages)
@@ -703,9 +743,10 @@ class PDFReportGenerator:
 
     def _build_artifact_section(
         self,
+        image: DicomImage,
         artifact_result: Optional[ArtifactInspectionResult],
     ) -> list:
-        """Build artifact inspection results section."""
+        """Build artifact inspection results section with image."""
         elements = []
 
         elements.append(Paragraph("Inspection des Artéfacts", self.styles['SectionTitle']))
@@ -714,6 +755,16 @@ class PDFReportGenerator:
             self.styles['InfoText']
         ))
         elements.append(Spacer(1, 6))
+
+        # Add artifact inspection image
+        try:
+            artifact_buffer = _generate_artifact_image(image)
+            artifact_img = Image(artifact_buffer, width=12 * cm, height=12 * cm)
+            artifact_img.hAlign = 'CENTER'
+            elements.append(artifact_img)
+            elements.append(Spacer(1, 8))
+        except Exception:
+            pass  # Skip image if generation fails
 
         if artifact_result is None:
             elements.append(Paragraph(
@@ -941,7 +992,17 @@ class PDFReportGenerator:
                 elements.append(Paragraph("Résultat : NON CONFORME", self.styles['ResultNC']))
                 elements.append(Paragraph(f"<i>→ {_action_text(False, False)}</i>", self.styles['ResultNC']))
 
-        elements.append(Spacer(1, 6))
+        elements.append(Spacer(1, 8))
+
+        # Add NPS plot
+        try:
+            nps_plot_buffer = _generate_nps_plot(results)
+            nps_plot_img = Image(nps_plot_buffer, width=14 * cm, height=9.3 * cm)
+            nps_plot_img.hAlign = 'CENTER'
+            elements.append(nps_plot_img)
+            elements.append(Spacer(1, 8))
+        except Exception:
+            pass  # Skip plot if generation fails
 
         # Warning for insufficient slices (ANSM requires 10 slices)
         if results.num_slices < 10:
@@ -1064,6 +1125,44 @@ class PDFReportGenerator:
         elements.append(Spacer(1, 8))
 
         return elements
+
+
+def generate_report_filename(
+    device_name: str,
+    inventory_number: str,
+    date: Optional[datetime] = None,
+) -> str:
+    """
+    Generate a standardized PDF report filename.
+
+    Pattern: CQI-trimestriel_device-name_inventory-number_YYYY-MM-DD.pdf
+
+    Args:
+        device_name: Name of the CT device.
+        inventory_number: Hospital inventory number.
+        date: Date for the report (defaults to today).
+
+    Returns:
+        Sanitized filename string.
+    """
+    import re
+
+    if date is None:
+        date = datetime.now()
+
+    # Sanitize device name and inventory number for filename
+    def sanitize(s: str) -> str:
+        # Replace spaces and special chars with hyphens, remove invalid chars
+        s = re.sub(r'[<>:"/\\|?*\[\]]', '', s)  # Remove invalid filename chars
+        s = re.sub(r'\s+', '-', s.strip())  # Replace spaces with hyphens
+        s = re.sub(r'-+', '-', s)  # Collapse multiple hyphens
+        return s.strip('-')
+
+    device_clean = sanitize(device_name) or "Unknown"
+    inventory_clean = sanitize(inventory_number) or "NoInv"
+    date_str = date.strftime('%Y-%m-%d')
+
+    return f"CQI-trimestriel_{device_clean}_{inventory_clean}_{date_str}.pdf"
 
 
 def generate_pdf_report(
