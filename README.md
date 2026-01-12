@@ -128,7 +128,7 @@ Des exécutables pré-compilés sont disponibles :
 
 **Windows :**
 ```powershell
-pipx uninstall cq-tdm
+pip uninstall cq-tdm
 del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\CQ TDM.lnk"
 del "%USERPROFILE%\Desktop\CQ TDM.lnk"
 rmdir /s /q "%LOCALAPPDATA%\CQ TDM"
