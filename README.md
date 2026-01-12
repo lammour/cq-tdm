@@ -1,7 +1,5 @@
 # CQ TDM
 
-<img src="src/cq_tdm/assets/icon.png" alt="CQ TDM" width="128" align="right">
-
 Logiciel d'analyse des images de fantômes d'eau pour le contrôle qualité des tomodensitomètres.
 
 ## Présentation
