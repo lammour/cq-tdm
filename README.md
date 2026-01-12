@@ -1,51 +1,55 @@
 # CQ TDM
 
-Application de bureau multiplateforme pour réaliser le **CQI (Contrôle Qualité Interne)** des scanners CT, conforme aux exigences réglementaires de l'ANSM.
+Logiciel d'analyse des images du fantôme d'eau pour le contrôle qualité des tomodensitomètres.
 
 ## Présentation
 
-CQ TDM traite les images DICOM de fantômes d'eau pour calculer et suivre les métriques de qualité des scanners CT dans le cadre du contrôle qualité interne, conformément à la Décision ANSM du 18/12/2025 (*Décision fixant les modalités du contrôle de qualité des tomodensitomètres*).
+CQ TDM (ou cq-tdm) analyse les images DICOM des fantômes d'eau pour évaluer le nombre CT de l'eau, l'uniformité, la magnitude et le spectre de puissance du bruit et les artefacts. Le logiciel a pour objectif de suivre la décision ANSM du 18/12/2025 fixant les modalités du contrôle de qualité des tomodensitomètres. Le calcul du spectre de puissance du bruit a pour objectif de se rapprocher au plus près de la méthode utilisée par [IQMetrix-CT](https://github.com/SFPM/iQMetrix-CT) et des résultats de référence disponibles sur le site de l'ANSM.
 
 ## Fonctionnalités
 
 - **Chargement d'images DICOM** : Charger et visualiser des séries DICOM CT
 - **Analyse du fantôme d'eau** :
-  - Exactitude et stabilité du nombre CT de l'eau
-  - Mesures d'uniformité
-  - Bruit (écart-type)
+  - Nombre CT de l'eau
+  - Uniformité
+  - Constance de la magnitude du bruit
 - **Spectre de Puissance du Bruit (SPB/NPS)** :
-  - Calcul SPB 2D avec moyennage radial
+  - Calcul du SPB 1D avec ajustement polynomial de degré 11
   - Calcul de la fréquence moyenne
-  - Ajustement polynomial de degré 11
-  - Comparaison visuelle des spectres
+  - Affichage du spectre
 - **Gestion des ROI** :
-  - Détection automatique du fantôme
-  - Import/export des configurations ROI (JSON)
-- **Génération de rapports PDF** : Rapports conformes à la réglementation avec statut de conformité
-- **Base de données des appareils** : Suivi de plusieurs scanners CT et de leur historique CQ
+  - Détection automatique du fantôme et placement des ROI
+  - Export des ROI (JSON, compatible avec IQMetrix-CT)
+- **Génération de rapports PDF**
+- **Base de données des appareils** :
+  - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB) et des informations d'identification
+  - Détection automatique des appareils enregistrés
+  - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
 
 ## Cadre réglementaire
 
-Basé sur la Décision ANSM du 18/12/2025.
+**Avertissement** : L'auteur ne garantit pas la conformité avec la décision ANSM du 18/12/2025, ni la validité des résultats. L'utilisateur est responsable de la vérification et de la validation des mesures avant toute utilisation réglementaire.
 
-**Avertissement** : L'auteur ne garantit pas la validité des résultats. L'utilisateur est responsable de la vérification et de la validation des mesures avant toute utilisation réglementaire.
+L'auteur s'efforce à ne pas changer les méthodes de calcul entre chaque version majeure du logiciel. Une attention à la reproductibilité des résultats doit tout de même être maintenue par l'utilisateur à chaque mise à jour.
 
-### Tolérances clés
-| Métrique | Critère |
-|----------|---------|
-| Exactitude du nombre CT | [-7, +7] HU |
-| Uniformité | [-7, +7] HU |
-| Stabilité du bruit | ±10% ou ±0.2 HU |
-| Stabilité de la fréquence moyenne SPB | ±10% |
+Un protocole de test automatisé est disponible avec le code source du logiciel, celui-ci compare les résultats du calcul de la fréquence moyenne du SPB avec les références fournies par l'ANSM :
+
+```bash
+# Lancer les tests de validation SPB
+pytest tests/test_nps_validation.py -v
+```
+
 
 ## Installation
 
-### Méthode 1 : Script d'installation (recommandée)
+Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de recommandation. Les trois méthodes peuvent être réalisées sur un poste de travail sans droits administrateur.
+
+### Méthode 1 : Script d'installation
 
 **Windows :**
-1. Installez [Python 3.10+](https://www.python.org/downloads/) si ce n'est pas déjà fait (cochez "Add Python to PATH" lors de l'installation)
-2. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat) (clic droit → "Enregistrer le lien sous...")
-3. Double-cliquez sur `install-windows.bat` pour exécuter
+1. S'il n'est pas déjà installé sur votre poste, installez [Python, version 3.10 ou supérieure](https://www.python.org/downloads/). Au cours de l'installation vérifiez que la case "Add Python to PATH" est cochée.
+2. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat) *(clic droit sur le lien → "Enregistrer le lien sous...")*
+3. Double-cliquez sur `install-windows.bat` pour l'exécuter
 
 **Linux :**
 1. Téléchargez le script d'installation :
@@ -61,7 +65,7 @@ Basé sur la Décision ANSM du 18/12/2025.
    ./install-linux.sh
    ```
 
-**macOS :**
+**macOS : (non testé !!!)**
 1. Téléchargez le script d'installation :
    ```bash
    curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-macos.sh
@@ -75,43 +79,33 @@ Basé sur la Décision ANSM du 18/12/2025.
    ./install-macos.sh
    ```
 
-Le script installe l'application et crée un raccourci dans le menu Démarrer/Applications (ou ~/Applications sur macOS).
+Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Démarrer/Applications (ou ~/Applications sur macOS).
 
 ### Méthode 2 : pip / pipx
 
-**Avec pip :**
-```bash
-pip install cq-tdm
-```
+1. Installez pip ou [pipx](https://pipx.pypa.io/) (recommandé)
 
-**Avec pipx (recommandé) :**
+2. Si vous utilisez pip, la création d'un environnement virtuel est fortement recommandée
 
-[pipx](https://pipx.pypa.io/) installe les applications Python dans des environnements isolés, évitant les conflits de dépendances.
+3. Installez le logiciel :
+  - Avec pip :
+  ```bash
+  pip install cq-tdm
+  ```
+  - Avec pipx :
+  ```bash
+  pipx install cq-tdm
+  ```
 
-1. Installez pipx si ce n'est pas déjà fait :
-   ```bash
-   # Linux (Debian/Ubuntu)
-   sudo apt install pipx
-
-   # macOS (Homebrew)
-   brew install pipx
-
-   # Ou via pip
-   pip install --user pipx
-   pipx ensurepath
-   ```
-2. Installez CQ TDM :
-   ```bash
-   pipx install cq-tdm
-   ```
-
-### Méthode 3 : Téléchargement direct
+### Méthode 3 : Téléchargement direct des exécutables
 
 Des exécutables pré-compilés sont disponibles dans les [Releases](https://github.com/lammour/cq-tdm/releases).
 
-> **Note Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
+> **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
 
-### Installation pour le développement
+## Installation pour le développement
+
+Testé sous Ubuntu 24.04.3 LTS avec Python 3.12.
 
 ```bash
 # Cloner le dépôt
@@ -120,9 +114,7 @@ cd cq-tdm
 
 # Créer et activer l'environnement virtuel
 python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# ou
-.venv\Scripts\activate     # Windows
+source .venv/bin/activate
 
 # Installer en mode développement
 pip install -e .
@@ -130,48 +122,9 @@ pip install -e .
 
 ## Utilisation
 
-```bash
-# Lancer l'application
-python -m cq_tdm
-# ou
-cq-tdm
-```
-
-### Démarrage rapide
-
 1. Lancer l'application
 2. Charger une série DICOM
 3. Modifier les détails de l'appareil, les valeurs de référence et les coupes de mesure
-4. Sauvegarder
+4. Enregistrer
 5. Vérifier les artéfacts
 6. Générer le rapport PDF
-
-## Structure du projet
-
-```
-src/cq_tdm/
-├── core/
-│   ├── dicom_loader.py    # Gestion des fichiers DICOM
-│   ├── water_phantom.py   # Analyse HU et uniformité
-│   ├── nps.py             # Spectre de Puissance du Bruit
-│   └── device_database.py # Suivi des scanners
-├── gui/
-│   ├── main_window.py     # Fenêtre principale
-│   └── image_viewer.py    # Visualiseur DICOM avec ROI
-└── reports/
-    └── pdf_report.py      # Génération de rapports PDF
-```
-
-## Tests
-
-```bash
-# Lancer les tests de validation SPB
-pytest tests/test_nps_validation.py -v
-```
-
-La suite de tests valide les calculs SPB par rapport aux données de référence iQMetrix (images de référence ANSM).
-
-## Références
-
-- Décision ANSM 18/12/2025 - Contrôle de qualité des tomodensitomètres
-- Guide d'application ANSM
