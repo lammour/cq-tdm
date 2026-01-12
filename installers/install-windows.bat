@@ -82,34 +82,10 @@ exit /b 1
 for /f "tokens=2" %%i in ('"%PYTHON%" --version 2^>^&1') do set PYVER=%%i
 echo [OK] Python %PYVER% found
 
-:: Check/install pipx
-set "USE_PIPX_MODULE=0"
-pipx --version >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo pipx not found. Installing pipx...
-    "%PYTHON%" -m pip install --user pipx
-    if errorlevel 1 (
-        echo [ERROR] Failed to install pipx
-        pause
-        exit /b 1
-    )
-    :: Ensure pipx is in PATH
-    "%PYTHON%" -m pipx ensurepath >nul 2>&1
-    echo [OK] pipx installed
-    set "USE_PIPX_MODULE=1"
-) else (
-    echo [OK] pipx found
-)
-
-:: Install cq-tdm with pipx
+:: Install cq-tdm with pip
 echo.
 echo Installing CQ TDM...
-if "%USE_PIPX_MODULE%"=="1" (
-    "%PYTHON%" -m pipx install cq-tdm --force
-) else (
-    pipx install cq-tdm --force
-)
+"%PYTHON%" -m pip install --upgrade cq-tdm
 if errorlevel 1 (
     echo [ERROR] Failed to install CQ TDM
     pause
@@ -117,21 +93,21 @@ if errorlevel 1 (
 )
 echo [OK] CQ TDM installed
 
-:: pipx installs to %USERPROFILE%\.local\bin on Windows
-:: Use cq-tdm-gui.exe (GUI script) instead of cq-tdm.exe to avoid console window
-set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm-gui.exe
+:: Find the installed script location
+:: pip installs scripts to Python's Scripts directory
+for /f "delims=" %%i in ('"%PYTHON%" -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do set SCRIPTS_DIR=%%i
+set SCRIPT_PATH=%SCRIPTS_DIR%\cq-tdm-gui.exe
 
-:: Check if exe exists
 if not exist "%SCRIPT_PATH%" (
-    :: Try pipx default location
-    for /f "delims=" %%i in ('"%PYTHON%" -c "import os; print(os.path.expanduser('~'))"') do set HOMEDIR=%%i
-    set SCRIPT_PATH=!HOMEDIR!\.local\bin\cq-tdm-gui.exe
+    :: Try user scripts location
+    for /f "delims=" %%i in ('"%PYTHON%" -m site --user-base"') do set USER_BASE=%%i
+    set SCRIPT_PATH=!USER_BASE!\Scripts\cq-tdm-gui.exe
 )
 
 if not exist "%SCRIPT_PATH%" (
     echo [WARNING] Could not find cq-tdm-gui.exe automatically.
-    echo Try restarting your terminal and running 'cq-tdm-gui'
-    set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm-gui.exe
+    echo Try running 'cq-tdm-gui' from the command line.
+    set SCRIPT_PATH=%SCRIPTS_DIR%\cq-tdm-gui.exe
 )
 
 echo [OK] Executable: %SCRIPT_PATH%
@@ -192,7 +168,7 @@ echo You can now:
 echo   - Find "CQ TDM" in your Start Menu
 echo   - Run "cq-tdm-gui" from the command line (or "cq-tdm" for console mode)
 echo.
-echo To uninstall later: pipx uninstall cq-tdm
+echo To uninstall later: pip uninstall cq-tdm
 echo.
 pause
 goto :eof
