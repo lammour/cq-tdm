@@ -76,7 +76,7 @@ def main():
     """Launch the CQ TDM application."""
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
-    app.setApplicationVersion("0.2.1")
+    app.setApplicationVersion("0.2.2")
     app.setStyle("Fusion")
     app.setPalette(_create_dark_palette())
 
