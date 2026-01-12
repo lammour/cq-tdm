@@ -4,10 +4,6 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
-
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtWidgets import (
@@ -1897,6 +1893,11 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _generate_nps_plot(self, nps_result: NPSResult) -> str:
         """Generate 1D NPS plot and return as base64-encoded PNG."""
+        # Lazy import matplotlib to improve startup time
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
 
         # Dark theme styling

@@ -56,19 +56,20 @@ if errorlevel 1 (
 echo [OK] CQ TDM installed
 
 :: pipx installs to %USERPROFILE%\.local\bin on Windows
-set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm.exe
+:: Use cq-tdm-gui.exe (GUI script) instead of cq-tdm.exe to avoid console window
+set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm-gui.exe
 
 :: Check if exe exists
 if not exist "%SCRIPT_PATH%" (
     :: Try pipx default location
     for /f "delims=" %%i in ('python -c "import os; print(os.path.expanduser('~'))"') do set HOMEDIR=%%i
-    set SCRIPT_PATH=!HOMEDIR!\.local\bin\cq-tdm.exe
+    set SCRIPT_PATH=!HOMEDIR!\.local\bin\cq-tdm-gui.exe
 )
 
 if not exist "%SCRIPT_PATH%" (
-    echo [WARNING] Could not find cq-tdm.exe automatically.
-    echo Try restarting your terminal and running 'cq-tdm'
-    set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm.exe
+    echo [WARNING] Could not find cq-tdm-gui.exe automatically.
+    echo Try restarting your terminal and running 'cq-tdm-gui'
+    set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm-gui.exe
 )
 
 echo [OK] Executable: %SCRIPT_PATH%
@@ -80,7 +81,7 @@ set ICON_DIR=%LOCALAPPDATA%\CQ TDM
 set ICON_PATH=%ICON_DIR%\icon.ico
 if not exist "%ICON_DIR%" mkdir "%ICON_DIR%"
 
-powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/lammour/cq-tdm/main/assets/icon.ico' -OutFile '%ICON_PATH%'" >nul 2>&1
+powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/lammour/cq-tdm/main/src/cq_tdm/assets/icon.ico' -OutFile '%ICON_PATH%'" >nul 2>&1
 if exist "%ICON_PATH%" (
     echo [OK] Icon downloaded
 ) else (
@@ -103,13 +104,21 @@ if exist "%SHORTCUT%" (
     echo [WARNING] Could not create shortcut
 )
 
-:: Offer to create Desktop shortcut
-echo.
-set /p DESKTOP_CHOICE="Create Desktop shortcut? (Y/N): "
-if /i "%DESKTOP_CHOICE%"=="Y" (
-    set DESKTOP_SHORTCUT=%USERPROFILE%\Desktop\CQ TDM.lnk
-    powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('!DESKTOP_SHORTCUT!'); $s.TargetPath = '%SCRIPT_PATH%'; $s.WorkingDirectory = '%USERPROFILE%'; $s.IconLocation = '%ICON_PATH%'; $s.Description = 'CT Scanner Internal Quality Control Software'; $s.Save()"
-    echo [OK] Desktop shortcut created
+:: Handle Desktop shortcut
+set DESKTOP_SHORTCUT=%USERPROFILE%\Desktop\CQ TDM.lnk
+if exist "%DESKTOP_SHORTCUT%" (
+    :: Update existing shortcut (handles upgrades from older versions)
+    echo Updating existing Desktop shortcut...
+    powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP_SHORTCUT%'); $s.TargetPath = '%SCRIPT_PATH%'; $s.WorkingDirectory = '%USERPROFILE%'; $s.IconLocation = '%ICON_PATH%'; $s.Description = 'CT Scanner Internal Quality Control Software'; $s.Save()"
+    echo [OK] Desktop shortcut updated
+) else (
+    :: Offer to create new shortcut
+    echo.
+    set /p DESKTOP_CHOICE="Create Desktop shortcut? (Y/N): "
+    if /i "!DESKTOP_CHOICE!"=="Y" (
+        powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP_SHORTCUT%'); $s.TargetPath = '%SCRIPT_PATH%'; $s.WorkingDirectory = '%USERPROFILE%'; $s.IconLocation = '%ICON_PATH%'; $s.Description = 'CT Scanner Internal Quality Control Software'; $s.Save()"
+        echo [OK] Desktop shortcut created
+    )
 )
 
 echo.
@@ -119,7 +128,7 @@ echo ========================================
 echo.
 echo You can now:
 echo   - Find "CQ TDM" in your Start Menu
-echo   - Run "cq-tdm" from the command line
+echo   - Run "cq-tdm-gui" from the command line (or "cq-tdm" for console mode)
 echo.
 echo To uninstall later: pipx uninstall cq-tdm
 echo.

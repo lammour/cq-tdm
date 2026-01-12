@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Plastic ring (outer phantom shell) -->
+  <circle cx="128" cy="128" r="118" fill="#787878" />
+
+  <!-- Water phantom interior (darker gray) -->
+  <circle cx="128" cy="128" r="106" fill="#585858" />
+
+  <!-- Central ROI indicator -->
+  <circle cx="128" cy="128" r="40" fill="none" stroke="#2A82DA" stroke-width="5" stroke-dasharray="8,4" />
+
+  <!-- Peripheral ROI indicators (4 cardinal positions) -->
+  <circle cx="128" cy="48" r="12" fill="none" stroke="#2A82DA" stroke-width="4" />
+  <circle cx="208" cy="128" r="12" fill="none" stroke="#2A82DA" stroke-width="4" />
+  <circle cx="128" cy="208" r="12" fill="none" stroke="#2A82DA" stroke-width="4" />
+  <circle cx="48" cy="128" r="12" fill="none" stroke="#2A82DA" stroke-width="4" />
+
+  <!-- Quality checkmark (bottom right) -->
+  <g transform="translate(156, 156)">
+    <circle cx="40" cy="40" r="38" fill="#2ECC71" />
+    <path d="M 22 40 L 34 52 L 58 26"
+          fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>

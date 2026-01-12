@@ -93,7 +93,7 @@ mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
 # Download icon from GitHub
-ICON_URL="https://raw.githubusercontent.com/lammour/cq-tdm/main/assets/icon.png"
+ICON_URL="https://raw.githubusercontent.com/lammour/cq-tdm/main/src/cq_tdm/assets/icon.png"
 ICON_DEST="$RESOURCES_DIR/icon.png"
 
 if curl -sL "$ICON_URL" -o "$ICON_DEST" 2>/dev/null; then

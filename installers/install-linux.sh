@@ -83,7 +83,7 @@ mkdir -p "$HOME/.local/share/applications"
 
 # Download icon from GitHub
 ICON_DEST="$HOME/.local/share/icons/cq-tdm.png"
-ICON_URL="https://raw.githubusercontent.com/lammour/cq-tdm/main/assets/icon.png"
+ICON_URL="https://raw.githubusercontent.com/lammour/cq-tdm/main/src/cq_tdm/assets/icon.png"
 
 echo ""
 echo "Downloading icon..."
@@ -123,15 +123,26 @@ if command -v update-desktop-database &> /dev/null; then
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null
 fi
 
-# Ask about desktop shortcut
-echo ""
-read -p "Create Desktop shortcut? (y/N): " DESKTOP_CHOICE
-if [[ "$DESKTOP_CHOICE" =~ ^[Yy]$ ]]; then
-    cp "$DESKTOP_FILE" "$HOME/Desktop/cq-tdm.desktop" 2>/dev/null
-    chmod +x "$HOME/Desktop/cq-tdm.desktop" 2>/dev/null
-    # Mark as trusted on GNOME
-    gio set "$HOME/Desktop/cq-tdm.desktop" metadata::trusted true 2>/dev/null
-    echo -e "${GREEN}[OK]${NC} Desktop shortcut created"
+# Handle desktop shortcut
+DESKTOP_SHORTCUT="$HOME/Desktop/cq-tdm.desktop"
+if [ -f "$DESKTOP_SHORTCUT" ]; then
+    # Update existing shortcut (handles upgrades from older versions)
+    echo "Updating existing Desktop shortcut..."
+    cp "$DESKTOP_FILE" "$DESKTOP_SHORTCUT"
+    chmod +x "$DESKTOP_SHORTCUT"
+    gio set "$DESKTOP_SHORTCUT" metadata::trusted true 2>/dev/null
+    echo -e "${GREEN}[OK]${NC} Desktop shortcut updated"
+else
+    # Ask about creating new shortcut
+    echo ""
+    read -p "Create Desktop shortcut? (y/N): " DESKTOP_CHOICE
+    if [[ "$DESKTOP_CHOICE" =~ ^[Yy]$ ]]; then
+        cp "$DESKTOP_FILE" "$DESKTOP_SHORTCUT" 2>/dev/null
+        chmod +x "$DESKTOP_SHORTCUT" 2>/dev/null
+        # Mark as trusted on GNOME
+        gio set "$DESKTOP_SHORTCUT" metadata::trusted true 2>/dev/null
+        echo -e "${GREEN}[OK]${NC} Desktop shortcut created"
+    fi
 fi
 
 echo ""

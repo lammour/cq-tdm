@@ -2,15 +2,30 @@
 
 import os
 import sys
+from pathlib import Path
 
 # Suppress Qt image IO warnings (e.g., ICC profile warnings for PNG files)
 os.environ["QT_LOGGING_RULES"] = "qt.gui.imageio=false"
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette, QColor
+from PySide6.QtGui import QPalette, QColor, QIcon
 from PySide6.QtWidgets import QApplication
 
 from cq_tdm.gui.main_window import MainWindow
+
+
+def _get_icon_path() -> Path | None:
+    """Get the path to the application icon."""
+    # Try to find icon in package assets
+    package_dir = Path(__file__).parent
+    icon_candidates = [
+        package_dir / "assets" / "icon.png",
+        package_dir / "assets" / "icon.ico",
+    ]
+    for icon_path in icon_candidates:
+        if icon_path.exists():
+            return icon_path
+    return None
 
 
 def _create_dark_palette() -> QPalette:
@@ -64,6 +79,11 @@ def main():
     app.setApplicationVersion("0.2.0")
     app.setStyle("Fusion")
     app.setPalette(_create_dark_palette())
+
+    # Set application icon
+    icon_path = _get_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()
