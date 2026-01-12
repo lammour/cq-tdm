@@ -112,6 +112,30 @@ Des exécutables pré-compilés sont disponibles :
 
 > **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
 
+## Désinstallation
+
+**Windows :**
+```powershell
+pipx uninstall cq-tdm
+del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\CQ TDM.lnk"
+del "%USERPROFILE%\Desktop\CQ TDM.lnk"
+rmdir /s /q "%LOCALAPPDATA%\CQ TDM"
+```
+
+**Linux :**
+```bash
+pipx uninstall cq-tdm
+rm -f ~/.local/share/applications/cq-tdm.desktop
+rm -f ~/.local/share/icons/cq-tdm.png
+rm -f ~/Desktop/cq-tdm.desktop
+```
+
+**macOS :**
+```bash
+pipx uninstall cq-tdm
+rm -rf ~/Applications/CQ\ TDM.app
+```
+
 ## Installation pour le développement
 
 Testé sous Ubuntu 24.04.3 LTS avec Python 3.12.
