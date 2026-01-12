@@ -8,46 +8,112 @@ echo ========================================
 echo.
 
 :: Check if Python is installed
+set "PYTHON="
+
+:: First check if python is in PATH
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Python not found.
-    echo Please install Python 3.10+ from https://python.org
-    echo Make sure to check "Add Python to environment variables" during installation.
+if not errorlevel 1 (
+    set "PYTHON=python"
+    goto :python_found
+)
+
+:: Check common install locations (newest first)
+for %%V in (314 313 312 311 310) do (
+    if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" (
+        set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
+        goto :python_found
+    )
+    if exist "C:\Program Files\Python%%V\python.exe" (
+        set "PYTHON=C:\Program Files\Python%%V\python.exe"
+        goto :python_found
+    )
+)
+
+:: Python not found, attempt to install
+echo Python not found. Attempting to install Python 3.14...
+echo.
+
+:: Try winget first (Windows 10/11)
+winget --version >nul 2>&1
+if not errorlevel 1 (
+    echo Installing Python via winget...
+    winget install Python.Python.3.14 --silent --accept-package-agreements --accept-source-agreements
+    if not errorlevel 1 (
+        set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+        goto :python_found
+    )
+    echo [WARNING] winget install failed, trying direct download...
+)
+
+:: Fallback: download installer directly
+echo Downloading Python installer...
+set "PYTHON_INSTALLER=%TEMP%\python-installer.exe"
+powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.14.0/python-3.14.0-amd64.exe' -OutFile '%PYTHON_INSTALLER%'"
+
+if not exist "%PYTHON_INSTALLER%" (
+    echo [ERROR] Failed to download Python installer.
+    echo Please install Python 3.10+ manually from https://python.org
     pause
     exit /b 1
 )
 
+echo Installing Python (this may take a minute)...
+"%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=1
+if errorlevel 1 (
+    echo [ERROR] Python installation failed.
+    echo Please install Python 3.10+ manually from https://python.org
+    del "%PYTHON_INSTALLER%" >nul 2>&1
+    pause
+    exit /b 1
+)
+del "%PYTHON_INSTALLER%" >nul 2>&1
+
+:: Set path to newly installed Python
+set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+
+:: Verify installation
+if not exist "%PYTHON%" (
+    echo [ERROR] Python installation completed but executable not found.
+    echo Please install Python 3.10+ manually from https://python.org
+    pause
+    exit /b 1
+)
+
+echo [OK] Python installed successfully
+
+:python_found
 :: Get Python version
-for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYVER=%%i
+for /f "tokens=2" %%i in ('"%PYTHON%" --version 2^>^&1') do set PYVER=%%i
 echo [OK] Python %PYVER% found
 
 :: Check/install pipx
+set "USE_PIPX_MODULE=0"
 pipx --version >nul 2>&1
 if errorlevel 1 (
     echo.
     echo pipx not found. Installing pipx...
-    pip install --user pipx
+    "%PYTHON%" -m pip install --user pipx
     if errorlevel 1 (
         echo [ERROR] Failed to install pipx
         pause
         exit /b 1
     )
     :: Ensure pipx is in PATH
-    python -m pipx ensurepath >nul 2>&1
+    "%PYTHON%" -m pipx ensurepath >nul 2>&1
     echo [OK] pipx installed
-    echo.
-    echo [NOTE] You may need to restart your terminal for pipx to be in PATH.
-    echo        Continuing with python -m pipx...
-    set PIPX_CMD=python -m pipx
+    set "USE_PIPX_MODULE=1"
 ) else (
     echo [OK] pipx found
-    set PIPX_CMD=pipx
 )
 
 :: Install cq-tdm with pipx
 echo.
 echo Installing CQ TDM...
-%PIPX_CMD% install cq-tdm --force
+if "%USE_PIPX_MODULE%"=="1" (
+    "%PYTHON%" -m pipx install cq-tdm --force
+) else (
+    pipx install cq-tdm --force
+)
 if errorlevel 1 (
     echo [ERROR] Failed to install CQ TDM
     pause
@@ -62,7 +128,7 @@ set SCRIPT_PATH=%USERPROFILE%\.local\bin\cq-tdm-gui.exe
 :: Check if exe exists
 if not exist "%SCRIPT_PATH%" (
     :: Try pipx default location
-    for /f "delims=" %%i in ('python -c "import os; print(os.path.expanduser('~'))"') do set HOMEDIR=%%i
+    for /f "delims=" %%i in ('"%PYTHON%" -c "import os; print(os.path.expanduser('~'))"') do set HOMEDIR=%%i
     set SCRIPT_PATH=!HOMEDIR!\.local\bin\cq-tdm-gui.exe
 )
 
