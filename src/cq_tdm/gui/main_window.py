@@ -94,6 +94,10 @@ class DeviceManagerDialog(QDialog):
         btn_new_db.clicked.connect(self._create_new_database)
         db_buttons_layout.addWidget(btn_new_db)
 
+        btn_move_db = QPushButton("Déplacer...")
+        btn_move_db.clicked.connect(self._move_database)
+        db_buttons_layout.addWidget(btn_move_db)
+
         left_layout.addWidget(db_buttons)
 
         left_layout.addSpacing(15)
@@ -383,6 +387,80 @@ class DeviceManagerDialog(QDialog):
             Path(file_path).write_text('{"version": 1, "devices": []}', encoding="utf-8")
             self._switch_database(file_path)
 
+    def _move_database(self):
+        """Move the current database to a new location."""
+        import shutil
+
+        # Check if database exists
+        if not self.device_db.db_path.exists():
+            QMessageBox.warning(
+                self,
+                "Aucune base de données",
+                "Il n'y a pas de base de données à déplacer."
+            )
+            return
+
+        old_path = self.device_db.db_path
+
+        # Ask for new location
+        new_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Déplacer la base de données",
+            old_path.name,
+            "JSON Files (*.json)"
+        )
+
+        if not new_path:
+            return
+
+        new_path = Path(new_path)
+
+        # Don't allow moving to the same location
+        if new_path.resolve() == old_path.resolve():
+            QMessageBox.information(
+                self,
+                "Même emplacement",
+                "Le nouvel emplacement est identique à l'emplacement actuel."
+            )
+            return
+
+        try:
+            # Create parent directory if needed
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Copy the database to new location
+            shutil.copy2(old_path, new_path)
+
+            # Switch to the new database
+            self._switch_database(str(new_path))
+
+            # Ask if user wants to delete the old file
+            reply = QMessageBox.question(
+                self,
+                "Supprimer l'ancienne base",
+                f"La base de données a été copiée vers :\n{new_path}\n\n"
+                f"Voulez-vous supprimer l'ancienne base de données ?\n{old_path}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                try:
+                    old_path.unlink()
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Erreur de suppression",
+                        f"Impossible de supprimer l'ancien fichier :\n{e}"
+                    )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible de déplacer la base de données :\n{e}"
+            )
+
     def _switch_database(self, file_path: str):
         """Switch to a different database file."""
         config = get_app_config()
@@ -554,6 +632,143 @@ class ReportSettingsDialog(QDialog):
         self.accept()
 
 
+class NotesEditorDialog(QDialog):
+    """Dialog for editing notes with simplified markdown support."""
+
+    def __init__(self, initial_text: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Notes")
+        self.setMinimumSize(600, 450)
+        self._setup_ui()
+        self._text_edit.setPlainText(initial_text)
+
+    def _setup_ui(self):
+        """Set up the dialog UI."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Rédigez vos notes ci-dessous. Formatage markdown simplifié supporté :"
+        )
+        layout.addWidget(instructions)
+
+        # Formatting hints
+        hints = QLabel(
+            "<span style='color: #888; font-size: 11px;'>"
+            "<b>**texte**</b> = gras  |  "
+            "<i>*texte*</i> = italique  |  "
+            "<b>## Titre</b> = titre  |  "
+            "<b>- item</b> = liste"
+            "</span>"
+        )
+        hints.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(hints)
+
+        # Toolbar with formatting buttons
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(0, 4, 0, 4)
+        toolbar_layout.setSpacing(4)
+
+        btn_bold = QPushButton("G")
+        btn_bold.setToolTip("Gras (**texte**)")
+        btn_bold.setMaximumWidth(30)
+        btn_bold.setStyleSheet("font-weight: bold;")
+        btn_bold.clicked.connect(self._insert_bold)
+        toolbar_layout.addWidget(btn_bold)
+
+        btn_italic = QPushButton("I")
+        btn_italic.setToolTip("Italique (*texte*)")
+        btn_italic.setMaximumWidth(30)
+        btn_italic.setStyleSheet("font-style: italic;")
+        btn_italic.clicked.connect(self._insert_italic)
+        toolbar_layout.addWidget(btn_italic)
+
+        btn_heading = QPushButton("H")
+        btn_heading.setToolTip("Titre (## Titre)")
+        btn_heading.setMaximumWidth(30)
+        btn_heading.clicked.connect(self._insert_heading)
+        toolbar_layout.addWidget(btn_heading)
+
+        btn_list = QPushButton("•")
+        btn_list.setToolTip("Liste (- item)")
+        btn_list.setMaximumWidth(30)
+        btn_list.clicked.connect(self._insert_list)
+        toolbar_layout.addWidget(btn_list)
+
+        toolbar_layout.addStretch()
+        layout.addWidget(toolbar)
+
+        # Text editor
+        from PySide6.QtWidgets import QPlainTextEdit
+        self._text_edit = QPlainTextEdit()
+        self._text_edit.setPlaceholderText(
+            "Saisissez vos notes ici...\n\n"
+            "Exemples :\n"
+            "## Observations\n"
+            "- Point important\n"
+            "- **À surveiller** : valeur limite\n"
+        )
+        self._text_edit.setStyleSheet("""
+            QPlainTextEdit {
+                font-family: monospace;
+                font-size: 12px;
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        layout.addWidget(self._text_edit, 1)
+
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _insert_bold(self):
+        """Insert bold markers around selection or at cursor."""
+        self._wrap_selection("**", "**")
+
+    def _insert_italic(self):
+        """Insert italic markers around selection or at cursor."""
+        self._wrap_selection("*", "*")
+
+    def _insert_heading(self):
+        """Insert heading marker at start of line."""
+        cursor = self._text_edit.textCursor()
+        cursor.movePosition(cursor.MoveOperation.StartOfLine)
+        cursor.insertText("## ")
+        self._text_edit.setTextCursor(cursor)
+
+    def _insert_list(self):
+        """Insert list marker at start of line."""
+        cursor = self._text_edit.textCursor()
+        cursor.movePosition(cursor.MoveOperation.StartOfLine)
+        cursor.insertText("- ")
+        self._text_edit.setTextCursor(cursor)
+
+    def _wrap_selection(self, prefix: str, suffix: str):
+        """Wrap current selection with prefix and suffix."""
+        cursor = self._text_edit.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            cursor.insertText(f"{prefix}{text}{suffix}")
+        else:
+            pos = cursor.position()
+            cursor.insertText(f"{prefix}{suffix}")
+            cursor.setPosition(pos + len(prefix))
+            self._text_edit.setTextCursor(cursor)
+
+    def get_text(self) -> str:
+        """Get the notes text."""
+        return self._text_edit.toPlainText()
+
+
 class MainWindow(QMainWindow):
     """Main application window for CQ TDM."""
 
@@ -568,6 +783,7 @@ class MainWindow(QMainWindow):
         self._nps_results: NPSResult | None = None
         self._artifact_result: bool | None = None  # True=present (NC), False=absent (Conforme)
         self._artifact_description: str = ""  # Description of artifacts if present
+        self._user_notes: str = ""  # User notes for the PDF report
         self._debug_mode: bool = False  # Debug mode for phantom detection visualization
 
         # Device database and current device (use custom path from config if set)
@@ -597,6 +813,12 @@ class MainWindow(QMainWindow):
         self._hu_debounce_timer.setInterval(300)  # 300ms
         self._hu_debounce_timer.timeout.connect(self._run_debounced_hu_analysis)
         self._pending_hu_slice: int | None = None
+
+        # Debounce timer for reference value changes (500ms)
+        self._ref_debounce_timer = QTimer()
+        self._ref_debounce_timer.setSingleShot(True)
+        self._ref_debounce_timer.setInterval(500)  # 500ms
+        self._ref_debounce_timer.timeout.connect(self._run_debounced_reference_update)
 
         # Saved slice values for tracking modifications
         self._saved_hu_slice: int | None = None
@@ -750,6 +972,10 @@ class MainWindow(QMainWindow):
         self._edit_ref_noise.textChanged.connect(self._on_field_changed)
         self._edit_ref_nps_freq.textChanged.connect(self._on_field_changed)
 
+        # Connect reference fields to debounced comparison update
+        self._edit_ref_noise.textChanged.connect(self._on_reference_field_changed)
+        self._edit_ref_nps_freq.textChanged.connect(self._on_reference_field_changed)
+
         device_form_layout.addWidget(QLabel("Établissement :"), 0, 0)
         device_form_layout.addWidget(self._edit_hospital_name, 0, 1)
         device_form_layout.addWidget(QLabel("Localisation :"), 1, 0)
@@ -808,6 +1034,11 @@ class MainWindow(QMainWindow):
         self.btn_artifact.setEnabled(False)
         self.btn_artifact.clicked.connect(self._inspect_artifacts)
         right_layout.addWidget(self.btn_artifact)
+
+        # Notes button
+        self.btn_notes = QPushButton("Notes")
+        self.btn_notes.clicked.connect(self._edit_notes)
+        right_layout.addWidget(self.btn_notes)
 
         # Export button
         self.btn_export = QPushButton("Exporter PDF")
@@ -1346,6 +1577,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     nps_image=nps_middle_image,
                     logo_path=get_app_config().report_logo_path or None,
                     logo_scale=get_app_config().report_logo_scale,
+                    notes=self._user_notes,
                 )
                 self.statusbar.showMessage(f"Rapport exporté: {file_path}")
 
@@ -1638,6 +1870,32 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         except Exception as e:
             self.statusbar.showMessage(f"Erreur analyse SPB: {e}")
 
+    def _on_reference_field_changed(self):
+        """Handle reference field change - debounce before updating comparison."""
+        # Only trigger update if we have results to compare against
+        if self._current_results is None and self._nps_results is None:
+            return
+
+        # Restart debounce timer
+        self._ref_debounce_timer.start()
+
+    def _run_debounced_reference_update(self):
+        """Update reference values and refresh results display after debounce."""
+        # Parse reference values from text fields
+        ref_noise_text = self._edit_ref_noise.text().strip()
+        ref_nps_freq_text = self._edit_ref_nps_freq.text().strip()
+
+        ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
+        ref_nps_freq = parse_float_fr(ref_nps_freq_text) if ref_nps_freq_text else None
+
+        # Update current device if it exists
+        if self._current_device is not None:
+            self._current_device.reference_noise = ref_noise
+            self._current_device.reference_nps_freq = ref_nps_freq
+
+        # Update results display to show comparison
+        self._update_results_display()
+
     def _toggle_debug_mode(self, checked: bool):
         """Toggle debug mode for phantom detection visualization."""
         self._debug_mode = checked
@@ -1712,6 +1970,17 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 self.statusbar.showMessage("Artéfacts: Présence détectée (NC)")
             else:
                 self.statusbar.showMessage("Artéfacts: Absence confirmée (Conforme)")
+
+    def _edit_notes(self):
+        """Open the notes editor dialog."""
+        dialog = NotesEditorDialog(self._user_notes, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._user_notes = dialog.get_text()
+            # Update button text to indicate notes are present
+            if self._user_notes.strip():
+                self.btn_notes.setText("Notes ✓")
+            else:
+                self.btn_notes.setText("Notes")
 
     def _get_empty_results_html(self) -> str:
         """Return HTML for empty results state."""
