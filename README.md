@@ -94,7 +94,20 @@ Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de 
 
 Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Démarrer/Applications (ou ~/Applications sur macOS).
 
-### Méthode 2 : pip / pipx
+### Méthode 2 : Téléchargement direct des exécutables
+
+Des exécutables pré-compilés sont disponibles :
+
+| Plateforme | Téléchargement |
+|------------|----------------|
+| Windows | [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) |
+| Linux | [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) |
+| macOS (Apple Silicon) | [CQ_TDM-macos-arm64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-arm64) |
+| macOS (Intel) | [CQ_TDM-macos-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-x86_64) |
+
+> **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
+
+### Méthode 3 : pip / pipx
 
 1. Installez pip ou [pipx](https://pipx.pypa.io/) (recommandé)
 
@@ -109,19 +122,6 @@ Le script installe l'application sous le nom **CQ TDM** et crée un raccourci da
   ```bash
   pipx install cq-tdm
   ```
-
-### Méthode 3 : Téléchargement direct des exécutables
-
-Des exécutables pré-compilés sont disponibles :
-
-| Plateforme | Téléchargement |
-|------------|----------------|
-| Windows | [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) |
-| Linux | [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) |
-| macOS (Apple Silicon) | [CQ_TDM-macos-arm64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-arm64) |
-| macOS (Intel) | [CQ_TDM-macos-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-x86_64) |
-
-> **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
 
 ## Désinstallation
 
