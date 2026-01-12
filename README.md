@@ -60,7 +60,7 @@ Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de 
 ### Méthode 1 : Script d'installation
 
 **Windows :**
-1. S'il n'est pas déjà installé sur votre poste, installez [Python, version 3.10 ou supérieure](https://www.python.org/downloads/). Au cours de l'installation vérifiez que la case "Add Python to PATH" est cochée.
+1. S'il n'est pas déjà installé sur votre poste, installez [Python, version 3.10 ou supérieure](https://www.python.org/downloads/). Au cours de l'installation vérifiez que la case "Add Python to environment variables" est cochée.
 2. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat) *(clic droit sur le lien → "Enregistrer le lien sous...")*
 3. Double-cliquez sur `install-windows.bat` pour l'exécuter
 
