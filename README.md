@@ -6,6 +6,8 @@ Logiciel d'analyse des images du fantôme d'eau pour le contrôle qualité des t
 
 CQ TDM (ou cq-tdm) analyse les images DICOM des fantômes d'eau pour évaluer le nombre CT de l'eau, l'uniformité, la magnitude et le spectre de puissance du bruit et les artefacts. Le logiciel a pour objectif de suivre la décision ANSM du 18/12/2025 fixant les modalités du contrôle de qualité des tomodensitomètres. Le calcul du spectre de puissance du bruit a pour objectif de se rapprocher au plus près de la méthode utilisée par [IQMetrix-CT](https://github.com/SFPM/iQMetrix-CT) et des résultats de référence disponibles sur le site de l'ANSM.
 
+![CQ TDM - Capture d'écran](docs/screenshot.png)
+
 ## Fonctionnalités
 
 - **Chargement d'images DICOM** : Charger et visualiser des séries DICOM CT
