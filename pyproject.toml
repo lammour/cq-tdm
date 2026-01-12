@@ -1,6 +1,6 @@
 [project]
 name = "cq-tdm"
-version = "0.2.2"
+version = "0.2.3"
 description = "CT Scanner Internal Quality Control Software"
 readme = "README.md"
 requires-python = ">=3.10"

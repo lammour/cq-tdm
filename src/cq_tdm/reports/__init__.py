@@ -3,5 +3,6 @@
 from .pdf_report import (
     PDFReportGenerator,
     generate_pdf_report,
+    generate_report_filename,
     ArtifactInspectionResult,
 )
