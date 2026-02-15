@@ -1545,12 +1545,11 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                         description=self._artifact_description,
                     )
 
-                # Get reference values from current device
-                ref_noise = None
-                ref_nps_freq = None
-                if self._current_device is not None:
-                    ref_noise = self._current_device.reference_noise
-                    ref_nps_freq = self._current_device.reference_nps_freq
+                # Get reference values from text fields (works even without saved device)
+                ref_noise_text = self._edit_ref_noise.text().strip()
+                ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
+                ref_nps_text = self._edit_ref_nps_freq.text().strip()
+                ref_nps_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
 
                 # Get NPS middle slice image for the report
                 nps_middle_image = None
@@ -2264,10 +2263,11 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _format_noise_stability_html(self, noise: float) -> str:
         """Format noise stability comparison with reference value."""
-        if self._current_device is None or self._current_device.reference_noise is None:
+        # Read reference value from text field directly (works even without a saved device)
+        ref_noise_text = self._edit_ref_noise.text().strip()
+        ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
+        if ref_noise is None:
             return ""
-
-        ref_noise = self._current_device.reference_noise
         deviation = noise - ref_noise
 
         # ANSM criterion: MIN(-0.2, -0.1*B_ref) ≤ (B_i - B_ref) ≤ MAX(0.2, 0.1*B_ref)
@@ -2289,11 +2289,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _format_nps_stability_html(self, mean_freq: float) -> str:
         """Format NPS frequency stability comparison with reference value."""
-        if self._current_device is None or self._current_device.reference_nps_freq is None:
-            return ""
-
-        ref_freq = self._current_device.reference_nps_freq
-        if ref_freq == 0:
+        # Read reference value from text field directly (works even without a saved device)
+        ref_nps_text = self._edit_ref_nps_freq.text().strip()
+        ref_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
+        if ref_freq is None or ref_freq == 0:
             return ""
 
         deviation_pct = ((mean_freq - ref_freq) / ref_freq) * 100
