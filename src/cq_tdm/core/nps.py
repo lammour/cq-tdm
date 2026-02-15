@@ -588,10 +588,10 @@ def analyze_nps(
         for slice_idx, roi_idx, roi_mean, roi_std in roi_stats:
             warnings_for_roi = []
 
-            # Check if mean deviates significantly (>3 sigma from overall mean)
+            # Check if mean deviates significantly (>3 sigma AND >2 HU from overall mean)
             if overall_std_of_means > 0:
                 z_score = abs(roi_mean - overall_mean) / overall_std_of_means
-                if z_score > 3:
+                if z_score > 3 and abs(roi_mean - overall_mean) > 2.0:
                     warnings_for_roi.append(
                         f"moyenne atypique ({roi_mean:.1f} HU vs {overall_mean:.1f} HU attendu)"
                     )
