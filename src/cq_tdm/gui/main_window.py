@@ -1933,7 +1933,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 <p><i>Utilisez ce logiciel à vos risques et périls !</i></p>
 
 <h3>Licence</h3>
-<p>Tous droits réservés.</p>
+<p>CeCILL v2.1 — Licence libre compatible GPL.</p>
 """
         msg = QMessageBox(self)
         msg.setWindowTitle("À propos de CQ TDM")
@@ -2267,7 +2267,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         ref_noise_text = self._edit_ref_noise.text().strip()
         ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
         if ref_noise is None:
-            return ""
+            return """
+                <tr><th>Critère stabilité</th><td>MIN(-0,2 ; -0,1×σ<sub>réf</sub>) ≤ écart ≤ MAX(0,2 ; 0,1×σ<sub>réf</sub>)</td></tr>
+                <tr><th>Statut</th><td class="pending">Renseigner σ de référence</td></tr>
+        """
         deviation = noise - ref_noise
 
         # ANSM criterion: MIN(-0.2, -0.1*B_ref) ≤ (B_i - B_ref) ≤ MAX(0.2, 0.1*B_ref)
@@ -2293,7 +2296,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         ref_nps_text = self._edit_ref_nps_freq.text().strip()
         ref_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
         if ref_freq is None or ref_freq == 0:
-            return ""
+            return """
+                <tr><th>Critère stabilité</th><td>±10 %</td></tr>
+                <tr><th>Statut</th><td class="pending">Renseigner fréquence de référence</td></tr>
+        """
 
         deviation_pct = ((mean_freq - ref_freq) / ref_freq) * 100
         is_conforme = -10.0 <= deviation_pct <= 10.0
