@@ -1030,13 +1030,13 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.results_browser, 1)
 
         # Artifact inspection button
-        self.btn_artifact = QPushButton("Inspection artéfacts")
+        self.btn_artifact = QPushButton("Inspection visuelle des artéfacts")
         self.btn_artifact.setEnabled(False)
         self.btn_artifact.clicked.connect(self._inspect_artifacts)
         right_layout.addWidget(self.btn_artifact)
 
         # Notes button
-        self.btn_notes = QPushButton("Notes")
+        self.btn_notes = QPushButton("Ajouter une observation")
         self.btn_notes.clicked.connect(self._edit_notes)
         right_layout.addWidget(self.btn_notes)
 
@@ -1977,9 +1977,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._user_notes = dialog.get_text()
             # Update button text to indicate notes are present
             if self._user_notes.strip():
-                self.btn_notes.setText("Notes ✓")
+                self.btn_notes.setText("Ajouter une observation ✓")
             else:
-                self.btn_notes.setText("Notes")
+                self.btn_notes.setText("Ajouter une observation")
 
     def _get_empty_results_html(self) -> str:
         """Return HTML for empty results state."""
