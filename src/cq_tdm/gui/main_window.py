@@ -1041,7 +1041,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.btn_notes)
 
         # Export button
-        self.btn_export = QPushButton("Exporter PDF")
+        self.btn_export = QPushButton("Exporter le rapport PDF")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_pdf)
         right_layout.addWidget(self.btn_export)
