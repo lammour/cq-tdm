@@ -1917,9 +1917,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
     def _show_about(self):
         """Show about dialog."""
         from PySide6.QtWidgets import QMessageBox
-        about_text = """
+        from cq_tdm import __version__
+        about_text = f"""
 <h2>CQ TDM</h2>
-<p><b>Version 0.2.0</b></p>
+<p><b>Version {__version__}</b></p>
 
 <p>Logiciel pour le contrôle de qualité interne des tomodensitomètres.</p>
 

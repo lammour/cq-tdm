@@ -16,6 +16,7 @@ dependencies = [
     "PySide6>=6.6.0",
     "matplotlib>=3.8.0",
     "reportlab>=4.0.0",
+    "Pillow>=9.0.0",
 ]
 
 [project.optional-dependencies]
