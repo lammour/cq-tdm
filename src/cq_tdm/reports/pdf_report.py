@@ -65,7 +65,7 @@ def _action_text(acceptable: bool, ncg: bool) -> str:
 def _status_color(acceptable: bool, ncg: bool) -> colors.Color:
     """Get color for status."""
     if acceptable:
-        return colors.green
+        return colors.Color(0, 0.5, 0)
     elif ncg:
         return colors.red
     else:

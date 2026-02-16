@@ -957,10 +957,15 @@ class MainWindow(QMainWindow):
         self._edit_inventory_number.setPlaceholderText("Numéro d'inventaire")
 
         # Reference values for stability tests
+        from PySide6.QtGui import QDoubleValidator
+        ref_validator = QDoubleValidator()
+        ref_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         self._edit_ref_noise = QLineEdit()
         self._edit_ref_noise.setPlaceholderText("Bruit de référence (HU)")
+        self._edit_ref_noise.setValidator(ref_validator)
         self._edit_ref_nps_freq = QLineEdit()
         self._edit_ref_nps_freq.setPlaceholderText("Fréq. moyenne SPB réf. (cycles/mm)")
+        self._edit_ref_nps_freq.setValidator(ref_validator)
 
         # Connect signals to update instance variables and check for modifications
         self._edit_hospital_name.textChanged.connect(self._on_field_changed)

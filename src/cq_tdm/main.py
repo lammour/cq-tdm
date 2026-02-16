@@ -76,9 +76,16 @@ def main():
     """Launch the CQ TDM application."""
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
-    app.setApplicationVersion("0.2.2")
+    from cq_tdm import __version__
+    app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
-    app.setPalette(_create_dark_palette())
+
+    # Apply dark palette unless system is already in light mode
+    # and --light flag is passed
+    if "--light" not in sys.argv:
+        app.setPalette(_create_dark_palette())
+    else:
+        sys.argv.remove("--light")
 
     # Set application icon
     icon_path = _get_icon_path()
