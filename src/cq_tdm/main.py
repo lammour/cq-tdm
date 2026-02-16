@@ -80,12 +80,16 @@ def main():
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
 
-    # Apply dark palette unless system is already in light mode
-    # and --light flag is passed
-    if "--light" not in sys.argv:
-        app.setPalette(_create_dark_palette())
-    else:
+    # Determine theme: --light flag overrides config
+    from cq_tdm.core.app_config import get_app_config
+    if "--light" in sys.argv:
         sys.argv.remove("--light")
+        theme = "light"
+    else:
+        theme = get_app_config().theme
+
+    if theme == "dark":
+        app.setPalette(_create_dark_palette())
 
     # Set application icon
     icon_path = _get_icon_path()

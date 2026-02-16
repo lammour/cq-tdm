@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from ..core import DicomImage
+from ..core import DicomImage, get_app_config
 
 
 class ToggleSwitch(QWidget):
@@ -464,7 +464,10 @@ class ImageViewer(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setBackgroundBrush(QColor(30, 30, 30))
+        if get_app_config().theme == "light":
+            self.setBackgroundBrush(QColor(240, 240, 240))
+        else:
+            self.setBackgroundBrush(QColor(30, 30, 30))
 
         # Placeholder text
         self._placeholder = self._scene.addText(
@@ -937,7 +940,8 @@ class ImageViewerWidget(QWidget):
 
         # Welcome screen (shown when no image loaded)
         self.welcome_widget = QWidget()
-        self.welcome_widget.setStyleSheet("background-color: #1e1e1e;")
+        is_light = get_app_config().theme == "light"
+        self.welcome_widget.setStyleSheet(f"background-color: {'#f0f0f0' if is_light else '#1e1e1e'};")
         welcome_layout = QVBoxLayout(self.welcome_widget)
         welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -1076,7 +1080,10 @@ class ImageViewerWidget(QWidget):
         """Create ROI toggle switches overlay on the image viewer."""
         # Create overlay container as child of self (not viewer_stack)
         self.roi_overlay = QWidget(self)
-        self.roi_overlay.setStyleSheet("background-color: rgba(30, 30, 30, 200); border-radius: 8px;")
+        if get_app_config().theme == "light":
+            self.roi_overlay.setStyleSheet("background-color: rgba(240, 240, 240, 200); border-radius: 8px;")
+        else:
+            self.roi_overlay.setStyleSheet("background-color: rgba(30, 30, 30, 200); border-radius: 8px;")
 
         overlay_layout = QVBoxLayout(self.roi_overlay)
         overlay_layout.setContentsMargins(10, 8, 10, 8)
@@ -1504,6 +1511,7 @@ class ArtifactInspectionDialog(QDialog):
 
     def _setup_ui(self):
         """Set up the dialog UI."""
+        is_light = get_app_config().theme == "light"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
@@ -1538,7 +1546,7 @@ class ArtifactInspectionDialog(QDialog):
         # Window settings info (below image)
         info_label = QLabel("Fenêtre artéfacts ANSM : Centre (L) = 0 UH, Largeur (W) = 80 UH")
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info_label.setStyleSheet("color: #aaa;")
+        info_label.setStyleSheet(f"color: {'#666' if is_light else '#aaa'};")
         layout.addWidget(info_label)
 
         # Button container
@@ -1603,7 +1611,7 @@ class ArtifactInspectionDialog(QDialog):
         desc_layout.setSpacing(8)
 
         desc_label = QLabel("Description des artéfacts observés :")
-        desc_label.setStyleSheet("color: #fff; font-weight: bold; font-size: 12px;")
+        desc_label.setStyleSheet(f"color: {'#222' if is_light else '#fff'}; font-weight: bold; font-size: 12px;")
         desc_layout.addWidget(desc_label)
 
         from PySide6.QtWidgets import QTextEdit
@@ -1612,16 +1620,28 @@ class ArtifactInspectionDialog(QDialog):
             "Décrivez les artéfacts observés (type, localisation, sévérité...)"
         )
         self._description_edit.setMaximumHeight(80)
-        self._description_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: #2b2b2b;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 12px;
-            }
-        """)
+        if is_light:
+            self._description_edit.setStyleSheet("""
+                QTextEdit {
+                    background-color: #ffffff;
+                    color: #222;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                    padding: 6px;
+                    font-size: 12px;
+                }
+            """)
+        else:
+            self._description_edit.setStyleSheet("""
+                QTextEdit {
+                    background-color: #2b2b2b;
+                    color: #fff;
+                    border: 1px solid #555;
+                    border-radius: 4px;
+                    padding: 6px;
+                    font-size: 12px;
+                }
+            """)
         desc_layout.addWidget(self._description_edit)
 
         # Confirm button for artifact description
@@ -1648,8 +1668,11 @@ class ArtifactInspectionDialog(QDialog):
 
         layout.addWidget(self._description_container)
 
-        # Set dark background
-        self.setStyleSheet("QDialog { background-color: #1e1e1e; }")
+        # Set dialog background
+        if is_light:
+            self.setStyleSheet("QDialog { background-color: #f0f0f0; }")
+        else:
+            self.setStyleSheet("QDialog { background-color: #1e1e1e; }")
 
     def _update_image(self):
         """Update the displayed image."""
