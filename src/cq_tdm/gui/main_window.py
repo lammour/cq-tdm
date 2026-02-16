@@ -48,6 +48,45 @@ from ..core import (
     parse_float_fr,
 )
 from ..reports import generate_pdf_report, generate_report_filename, ArtifactInspectionResult
+
+
+def _theme_colors() -> dict:
+    """Return color dict based on current theme setting."""
+    is_light = get_app_config().theme == "light"
+    if is_light:
+        return {
+            "bg": "#ffffff",
+            "text": "#222222",
+            "text_secondary": "#555555",
+            "border": "#cccccc",
+            "section_title": "#1565c0",
+            "section_border": "#1565c0",
+            "th": "#666666",
+            "td": "#222222",
+            "roi_header_bg": "#e0e0e0",
+            "pending": "#999999",
+            "warning_bg": "#fff3e0",
+            "warning_border": "#ff9800",
+            "warning_title": "#e65100",
+            "warning_text": "#bf360c",
+        }
+    else:
+        return {
+            "bg": "#2b2b2b",
+            "text": "#e0e0e0",
+            "text_secondary": "#aaaaaa",
+            "border": "#444444",
+            "section_title": "#4fc3f7",
+            "section_border": "#4fc3f7",
+            "th": "#aaaaaa",
+            "td": "#ffffff",
+            "roi_header_bg": "#333333",
+            "pending": "#888888",
+            "warning_bg": "#4a3000",
+            "warning_border": "#ff9800",
+            "warning_title": "#ff9800",
+            "warning_text": "#ffcc80",
+        }
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 
@@ -709,16 +748,17 @@ class NotesEditorDialog(QDialog):
             "- Point important\n"
             "- **À surveiller** : valeur limite\n"
         )
-        self._text_edit.setStyleSheet("""
-            QPlainTextEdit {
+        c = _theme_colors()
+        self._text_edit.setStyleSheet(f"""
+            QPlainTextEdit {{
                 font-family: monospace;
                 font-size: 12px;
-                background-color: #2b2b2b;
-                color: #e0e0e0;
-                border: 1px solid #444;
+                background-color: {c['bg']};
+                color: {c['text']};
+                border: 1px solid {c['border']};
                 border-radius: 4px;
                 padding: 8px;
-            }
+            }}
         """)
         layout.addWidget(self._text_edit, 1)
 
@@ -858,6 +898,11 @@ class MainWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&Affichage")
         view_menu.addAction("Informations image...", self._show_image_info, "Ctrl+I")
+        view_menu.addSeparator()
+        self._theme_action = view_menu.addAction("Thème clair")
+        self._theme_action.setCheckable(True)
+        self._theme_action.setChecked(get_app_config().theme == "light")
+        self._theme_action.triggered.connect(self._toggle_theme)
 
         # Configuration menu
         config_menu = menubar.addMenu("&Configuration")
@@ -1023,14 +1068,15 @@ class MainWindow(QMainWindow):
 
         self.results_browser = QTextBrowser()
         self.results_browser.setOpenExternalLinks(False)
-        self.results_browser.setStyleSheet("""
-            QTextBrowser {
-                background-color: #2b2b2b;
-                color: #e0e0e0;
-                border: 1px solid #444;
+        c = _theme_colors()
+        self.results_browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: {c['bg']};
+                color: {c['text']};
+                border: 1px solid {c['border']};
                 border-radius: 4px;
                 font-size: 12px;
-            }
+            }}
         """)
         self.results_browser.setHtml(self._get_empty_results_html())
         right_layout.addWidget(self.results_browser, 1)
@@ -1915,6 +1961,17 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         # Update results display to show comparison
         self._update_results_display()
 
+    def _toggle_theme(self, checked: bool):
+        """Toggle between dark and light theme."""
+        config = get_app_config()
+        config.theme = "light" if checked else "dark"
+        save_app_config()
+
+        QMessageBox.information(
+            self, "Thème",
+            "Le changement de thème sera appliqué au prochain lancement de l'application."
+        )
+
     def _toggle_debug_mode(self, checked: bool):
         """Toggle debug mode for phantom detection visualization."""
         self._debug_mode = checked
@@ -2004,8 +2061,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _get_empty_results_html(self) -> str:
         """Return HTML for empty results state."""
-        return """
-        <div style="color: #888; text-align: center; padding: 40px;">
+        c = _theme_colors()
+        return f"""
+        <div style="color: {c['pending']}; text-align: center; padding: 40px;">
             <p>Aucune analyse effectuée</p>
             <p style="font-size: 11px;">Ouvrez un dossier DICOM pour lancer l'analyse</p>
         </div>
@@ -2021,30 +2079,31 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         if self._current_results is None and self._nps_results is None and self._artifact_result is None:
             return self._get_empty_results_html()
 
-        css = """
+        c = _theme_colors()
+        css = f"""
         <style>
-            body { font-family: -apple-system, sans-serif; font-size: 12px; color: #e0e0e0; margin: 8px; }
-            .section { margin-bottom: 16px; }
-            .section-title {
+            body {{ font-family: -apple-system, sans-serif; font-size: 12px; color: {c['text']}; margin: 8px; }}
+            .section {{ margin-bottom: 16px; }}
+            .section-title {{
                 font-weight: bold;
                 font-size: 13px;
-                color: #4fc3f7;
-                border-bottom: 1px solid #4fc3f7;
+                color: {c['section_title']};
+                border-bottom: 1px solid {c['section_border']};
                 padding-bottom: 4px;
                 margin-bottom: 8px;
-            }
-            table { width: 100%; border-collapse: collapse; margin: 4px 0; }
-            th, td { padding: 4px 8px; text-align: left; }
-            th { color: #aaa; font-weight: normal; width: 45%; }
-            td { color: #fff; }
-            .ok { color: #4caf50; font-weight: bold; }
-            .nc { color: #ff9800; font-weight: bold; }
-            .ncg { color: #f44336; font-weight: bold; }
-            .pending { color: #888; font-style: italic; }
-            .value { font-family: monospace; }
-            .roi-table th { width: 20%; text-align: center; }
-            .roi-table td { text-align: center; font-family: monospace; }
-            .roi-header { background-color: #333; }
+            }}
+            table {{ width: 100%; border-collapse: collapse; margin: 4px 0; }}
+            th, td {{ padding: 4px 8px; text-align: left; }}
+            th {{ color: {c['th']}; font-weight: normal; width: 45%; }}
+            td {{ color: {c['td']}; }}
+            .ok {{ color: #4caf50; font-weight: bold; }}
+            .nc {{ color: #ff9800; font-weight: bold; }}
+            .ncg {{ color: #f44336; font-weight: bold; }}
+            .pending {{ color: {c['pending']}; font-style: italic; }}
+            .value {{ font-family: monospace; }}
+            .roi-table th {{ width: 20%; text-align: center; }}
+            .roi-table td {{ text-align: center; font-family: monospace; }}
+            .roi-header {{ background-color: {c['roi_header_bg']}; }}
         </style>
         """
 
@@ -2133,13 +2192,14 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
         # Build warnings HTML if any
         warnings_html = ""
+        c = _theme_colors()
 
         # Warning for insufficient slices (ANSM requires 10 slices)
         if r.num_slices < 10:
             warnings_html += f"""
-            <div style="margin-top: 8px; padding: 8px; background-color: #4a3000; border-radius: 4px; border-left: 3px solid #ff9800;">
-                <div style="color: #ff9800; font-weight: bold; margin-bottom: 4px;">⚠ Nombre de coupes insuffisant</div>
-                <div style="color: #ffcc80; font-size: 11px;">
+            <div style="margin-top: 8px; padding: 8px; background-color: {c['warning_bg']}; border-radius: 4px; border-left: 3px solid {c['warning_border']};">
+                <div style="color: {c['warning_title']}; font-weight: bold; margin-bottom: 4px;">⚠ Nombre de coupes insuffisant</div>
+                <div style="color: {c['warning_text']}; font-size: 11px;">
                     L'ANSM recommande d'analyser 10 coupes centrées sur la coupe centrale.
                     Seulement {r.num_slices} coupe(s) utilisée(s).
                 </div>
@@ -2156,9 +2216,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             if len(r.roi_warnings) > 5:
                 more_text = f"<li><i>... et {len(r.roi_warnings) - 5} autre(s)</i></li>"
             warnings_html += f"""
-            <div style="margin-top: 8px; padding: 8px; background-color: #4a3000; border-radius: 4px; border-left: 3px solid #ff9800;">
-                <div style="color: #ff9800; font-weight: bold; margin-bottom: 4px;">⚠ Attention : contenu non uniforme détecté</div>
-                <ul style="margin: 0; padding-left: 20px; color: #ffcc80; font-size: 11px;">
+            <div style="margin-top: 8px; padding: 8px; background-color: {c['warning_bg']}; border-radius: 4px; border-left: 3px solid {c['warning_border']};">
+                <div style="color: {c['warning_title']}; font-weight: bold; margin-bottom: 4px;">⚠ Attention : contenu non uniforme détecté</div>
+                <ul style="margin: 0; padding-left: 20px; color: {c['warning_text']}; font-size: 11px;">
                     {warnings_list}
                     {more_text}
                 </ul>

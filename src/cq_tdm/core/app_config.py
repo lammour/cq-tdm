@@ -18,6 +18,9 @@ class AppConfig:
     # Database settings
     device_database_path: str = ""  # Custom path to devices.json (empty = default)
 
+    # UI settings
+    theme: str = "dark"  # "dark" or "light"
+
     @classmethod
     def config_dir(cls) -> Path:
         """Get the platform-specific config directory.
