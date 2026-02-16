@@ -3,6 +3,8 @@
 Generates structured PDF reports according to ANSM decision of 18/12/2025.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,26 +15,70 @@ import numpy as np
 
 from cq_tdm import __version__
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm, cm
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    Image,
-    PageBreak,
-    KeepTogether,
-)
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
-
 from ..core import DicomImage, WaterPhantomResults, NPSResult, format_fr
+
+# Reportlab imports are deferred to _ensure_reportlab() for faster startup
+colors = None
+A4 = None
+getSampleStyleSheet = None
+ParagraphStyle = None
+mm = None
+cm = None
+SimpleDocTemplate = None
+Paragraph = None
+Spacer = None
+Table = None
+TableStyle = None
+Image = None
+PageBreak = None
+KeepTogether = None
+TA_CENTER = None
+TA_LEFT = None
+TA_RIGHT = None
+pdfmetrics = None
+TTFont = None
+canvas = None
+
+
+def _ensure_reportlab():
+    """Import reportlab modules on first use."""
+    global colors, A4, getSampleStyleSheet, ParagraphStyle, mm, cm
+    global SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
+    global TA_CENTER, TA_LEFT, TA_RIGHT, pdfmetrics, TTFont, canvas
+    if colors is not None:
+        return
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.pagesizes import A4 as _A4
+    from reportlab.lib.styles import getSampleStyleSheet as _gss, ParagraphStyle as _PS
+    from reportlab.lib.units import mm as _mm, cm as _cm
+    from reportlab.platypus import (
+        SimpleDocTemplate as _SD, Paragraph as _P, Spacer as _Sp,
+        Table as _T, TableStyle as _TS, Image as _I, PageBreak as _PB, KeepTogether as _KT,
+    )
+    from reportlab.lib.enums import TA_CENTER as _TC, TA_LEFT as _TL, TA_RIGHT as _TR
+    from reportlab.pdfbase import pdfmetrics as _pm
+    from reportlab.pdfbase.ttfonts import TTFont as _TF
+    from reportlab.pdfgen import canvas as _cv
+    colors = _colors
+    A4 = _A4
+    getSampleStyleSheet = _gss
+    ParagraphStyle = _PS
+    mm = _mm
+    cm = _cm
+    SimpleDocTemplate = _SD
+    Paragraph = _P
+    Spacer = _Sp
+    Table = _T
+    TableStyle = _TS
+    Image = _I
+    PageBreak = _PB
+    KeepTogether = _KT
+    TA_CENTER = _TC
+    TA_LEFT = _TL
+    TA_RIGHT = _TR
+    pdfmetrics = _pm
+    TTFont = _TF
+    canvas = _cv
 
 
 @dataclass
@@ -64,6 +110,7 @@ def _action_text(acceptable: bool, ncg: bool) -> str:
 
 def _status_color(acceptable: bool, ncg: bool) -> colors.Color:
     """Get color for status."""
+    _ensure_reportlab()
     if acceptable:
         return colors.Color(0, 0.5, 0)
     elif ncg:
@@ -261,6 +308,7 @@ def _generate_artifact_image(
 
 def _create_status_badge(status_text: str, status_color: colors.Color) -> Table:
     """Create a colored status badge as a small table."""
+    _ensure_reportlab()
     # Always use white text for badges
     text_color = colors.white
 
@@ -287,6 +335,7 @@ def _create_status_badge(status_text: str, status_color: colors.Color) -> Table:
 
 def _draw_footer(canvas_obj: canvas.Canvas, doc, page_num: int):
     """Draw footer with page number."""
+    _ensure_reportlab()
     canvas_obj.saveState()
     canvas_obj.setFont('Helvetica', 9)
     canvas_obj.setFillColor(colors.Color(0.5, 0.5, 0.5))
@@ -300,6 +349,7 @@ def _draw_footer(canvas_obj: canvas.Canvas, doc, page_num: int):
 
 def _draw_header(canvas_obj: canvas.Canvas, doc, hospital_name: str, device_name: str, inventory_number: str, control_datetime: str):
     """Draw header with hospital name, device name with inventory number, and control date."""
+    _ensure_reportlab()
     canvas_obj.saveState()
     canvas_obj.setFont('Helvetica', 8)
     canvas_obj.setFillColor(colors.Color(0.4, 0.4, 0.4))
@@ -339,6 +389,7 @@ class PDFReportGenerator:
         logo_scale: float = 1.0,
         notes: str = "",
     ):
+        _ensure_reportlab()
         self.hospital_name = hospital_name
         self.hospital_location = hospital_location
         self.device_name = device_name
