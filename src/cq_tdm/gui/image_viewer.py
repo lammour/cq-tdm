@@ -974,7 +974,7 @@ class ImageViewerWidget(QWidget):
 
         welcome_layout.addSpacing(10)
 
-        hint_label = QLabel("ou utilisez Fichier → Ouvrir un dossier DICOM (Ctrl+O)")
+        hint_label = QLabel("ou glissez-déposez un dossier DICOM dans la fenêtre")
         hint_label.setStyleSheet("color: #666; font-size: 11px;")
         hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(hint_label)
