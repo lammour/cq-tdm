@@ -55,17 +55,31 @@ Les résultats de la version actuelle sont présentés ci-dessous :
 
 ## Installation
 
-Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de recommandation. Les trois méthodes peuvent être réalisées sur un poste de travail sans droits administrateur.
+Plusieurs méthodes d'installation sont disponibles. Toutes peuvent être réalisées sur un poste de travail sans droits administrateur.
 
-### Méthode 1 : Script d'installation
+### Windows
 
-**Windows :**
-1. Téléchargez [`install-windows.bat`](https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-windows.bat) *(clic droit sur le lien → "Enregistrer le lien sous...")*
-2. Double-cliquez sur `install-windows.bat` pour l'exécuter
+**Méthode recommandée : Programme d'installation**
 
-> **Note :** Python sera installé automatiquement s'il n'est pas déjà présent sur votre poste.
+1. Téléchargez le programme d'installation depuis la [page des releases](https://github.com/lammour/cq-tdm/releases/latest)
+2. Double-cliquez sur `CQ_TDM_x.x.x_Setup.exe` pour lancer l'assistant d'installation
 
-**Linux :**
+L'assistant installe l'application, crée un raccourci dans le menu Démarrer et permet la désinstallation via « Ajout/Suppression de programmes ».
+
+> **Note :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
+
+**Alternative : Exécutable portable**
+
+Téléchargez [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) — aucune installation requise.
+
+> **Note :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
+
+### GNU/Linux
+
+Testé sous Ubuntu 24.04.3 LTS.
+
+**Méthode recommandée : Script d'installation**
+
 1. Téléchargez le script d'installation :
    ```bash
    curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-linux.sh
@@ -79,20 +93,13 @@ Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de 
    ./install-linux.sh
    ```
 
-Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Démarrer/Applications.
+Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Applications.
 
-### Méthode 2 : Téléchargement direct des exécutables
+**Alternative : Exécutable portable**
 
-Des exécutables pré-compilés sont disponibles :
+Téléchargez [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) — aucune installation requise.
 
-| Plateforme | Téléchargement |
-|------------|----------------|
-| Windows | [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) |
-| Linux | [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) |
-
-> **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
-
-### Méthode 3 : pip / pipx
+### pip / pipx
 
 1. Installez pip ou [pipx](https://pipx.pypa.io/) (recommandé)
 
@@ -107,24 +114,6 @@ Des exécutables pré-compilés sont disponibles :
   ```bash
   pipx install cq-tdm
   ```
-
-## Désinstallation
-
-**Windows :**
-```powershell
-pip uninstall cq-tdm
-del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\CQ TDM.lnk"
-del "%USERPROFILE%\Desktop\CQ TDM.lnk"
-rmdir /s /q "%LOCALAPPDATA%\CQ TDM"
-```
-
-**Linux :**
-```bash
-pipx uninstall cq-tdm
-rm -f ~/.local/share/applications/cq-tdm.desktop
-rm -f ~/.local/share/icons/cq-tdm.png
-rm -f ~/Desktop/cq-tdm.desktop
-```
 
 ## Installation pour le développement
 
