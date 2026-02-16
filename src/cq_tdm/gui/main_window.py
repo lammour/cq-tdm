@@ -776,6 +776,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("CQ TDM")
         self.setMinimumSize(900, 600)
+        self.setAcceptDrops(True)
 
         self._current_image: DicomImage | None = None
         self._current_series: DicomSeries | None = None
@@ -1404,6 +1405,20 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         )
         if folder_path:
             self._load_dicom_folder(folder_path)
+
+    def dragEnterEvent(self, event):
+        """Accept drag events containing folders or files."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """Handle drop - open the first folder (or parent folder of first file)."""
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        path = Path(urls[0].toLocalFile())
+        folder = path if path.is_dir() else path.parent
+        self._load_dicom_folder(str(folder))
 
     def _load_dicom_folder(self, folder_path: str):
         """Load DICOM series from folder."""
