@@ -46,19 +46,19 @@ jobs:
         run: pyinstaller cq_tdm.spec
 
       - name: Rename executable
-        run: mv dist/CQ_TDM dist/CQ_TDM-linux-x86_64
+        run: mv dist/CQ_TDM dist/CQ_TDM_Portable_Linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CQ_TDM-linux-x86_64
-          path: dist/CQ_TDM-linux-x86_64
+          name: CQ_TDM_Portable_Linux
+          path: dist/CQ_TDM_Portable_Linux
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CQ_TDM-linux-x86_64
+          files: dist/CQ_TDM_Portable_Linux
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -87,7 +87,7 @@ jobs:
         run: pyinstaller cq_tdm.spec
 
       - name: Rename portable executable
-        run: ren dist\CQ_TDM.exe CQ_TDM-windows-x86_64.exe
+        run: ren dist\CQ_TDM.exe CQ_TDM_Portable_Windows.exe
 
       - name: Build installer folder
         run: pyinstaller installers/cq_tdm_installer.spec
@@ -101,21 +101,21 @@ jobs:
       - name: Upload portable executable
         uses: actions/upload-artifact@v4
         with:
-          name: CQ_TDM-windows-x86_64.exe
-          path: dist/CQ_TDM-windows-x86_64.exe
+          name: CQ_TDM_Portable_Windows
+          path: dist/CQ_TDM_Portable_Windows.exe
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: CQ_TDM-Setup
-          path: installers/Output/*.exe
+          name: CQ_TDM_Setup_Windows
+          path: installers/Output/CQ_TDM_Setup_Windows.exe
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/CQ_TDM-windows-x86_64.exe
-            installers/Output/*.exe
+            dist/CQ_TDM_Portable_Windows.exe
+            installers/Output/CQ_TDM_Setup_Windows.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
