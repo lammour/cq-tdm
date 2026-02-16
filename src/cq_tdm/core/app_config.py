@@ -25,7 +25,6 @@ class AppConfig:
         Returns:
             - Windows: %APPDATA%/cq_tdm/
             - Linux: ~/.config/cq_tdm/
-            - macOS: ~/Library/Preferences/cq_tdm/
         """
         base_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation)
         config_dir = Path(base_path) / "cq_tdm"
