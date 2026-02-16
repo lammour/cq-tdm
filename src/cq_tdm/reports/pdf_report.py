@@ -11,6 +11,8 @@ from io import BytesIO
 
 import numpy as np
 
+from cq_tdm import __version__
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -563,7 +565,7 @@ class PDFReportGenerator:
         # Content footer (software info)
         story.append(Spacer(1, 30))
         story.append(Paragraph(
-            "Rapport généré par CQ TDM v0.2.3",
+            f"Rapport généré par CQ TDM v{__version__}",
             self.styles['Footer']
         ))
 
