@@ -96,9 +96,9 @@ class DeviceConfig:
                 device_parts.append(self.dicom_model_name)
             parts.append(" ".join(device_parts))
 
-        # Inventory number
+        # Inventory number for disambiguation
         if self.inventory_number:
-            parts.append(self.inventory_number)
+            parts.append(f"N°inv. {self.inventory_number}")
 
         if parts:
             return " - ".join(parts)

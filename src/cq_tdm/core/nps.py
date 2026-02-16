@@ -304,7 +304,9 @@ def radial_average(
     from scipy import ndimage
 
     rows, cols = nps_2d.shape
-    fft_size = rows  # Assume square
+    if rows != cols:
+        raise ValueError(f"NPS array must be square, got {rows}x{cols}")
+    fft_size = rows
 
     # Calculate Nyquist frequency
     nyquist = 1.0 / (2.0 * pixel_size_mm)

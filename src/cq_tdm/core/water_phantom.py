@@ -245,6 +245,9 @@ def measure_roi(image: DicomImage, roi: ROIDefinition) -> ROIMeasurement:
 
     values = image.pixel_array[mask]
 
+    if len(values) == 0:
+        raise ValueError(f"ROI '{roi.name}' contains no pixels (center={roi.center_row},{roi.center_col}, radius={roi.radius})")
+
     return ROIMeasurement(
         name=roi.name,
         center_row=roi.center_row,
