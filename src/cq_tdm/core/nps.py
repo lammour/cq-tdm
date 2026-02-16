@@ -11,7 +11,6 @@ Requirements:
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
-from scipy import integrate
 
 from .dicom_loader import DicomImage, DicomSeries, detect_phantom_center, estimate_phantom_diameter
 
@@ -625,6 +624,7 @@ def analyze_nps(
     # Compute mean frequency (centroid of FITTED NPS curve)
     # f_mean = ∫ f * NPS(f) df / ∫ NPS(f) df
     # Use trapezoid integration for better accuracy
+    from scipy import integrate
     total_power = integrate.trapezoid(nps_radial_fit, freq_radial)
     if total_power > 0:
         mean_frequency = integrate.trapezoid(freq_radial * nps_radial_fit, freq_radial) / total_power

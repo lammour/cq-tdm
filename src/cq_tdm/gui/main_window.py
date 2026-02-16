@@ -29,6 +29,12 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
+# Lightweight imports - no heavy dependencies
+from ..core.app_config import get_app_config, save_app_config
+from ..core.device_database import DeviceConfig, DeviceDatabase
+from ..core.utils import format_fr, parse_float_fr
+
+# Heavy imports - deferred via lazy __init__.py (pydicom, numpy, scipy)
 from ..core import (
     DicomImage,
     DicomSeries,
@@ -40,13 +46,9 @@ from ..core import (
     NPSResult,
     detect_phantom_center,
     estimate_phantom_diameter,
-    DeviceConfig,
-    DeviceDatabase,
-    get_app_config,
-    save_app_config,
-    format_fr,
-    parse_float_fr,
 )
+
+# Report imports - deferred via lazy __init__.py (reportlab)
 from ..reports import generate_pdf_report, generate_report_filename, ArtifactInspectionResult
 
 

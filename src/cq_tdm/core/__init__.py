@@ -1,35 +1,6 @@
 """Core analysis modules for CQ TDM."""
 
-from .dicom_loader import (
-    DicomImage,
-    DicomSeries,
-    load_dicom_file,
-    load_dicom_folder,
-    detect_phantom_center,
-    estimate_phantom_diameter,
-)
-
-from .water_phantom import (
-    ROIDefinition,
-    ROIMeasurement,
-    WaterPhantomROIs,
-    WaterPhantomResults,
-    calculate_rois,
-    measure_roi,
-    analyze_water_phantom,
-    format_results_text,
-)
-
-from .nps import (
-    NPSROIPosition,
-    NPSROIConfig,
-    NPSResult,
-    ROIUniformityWarning,
-    calculate_nps_roi_positions,
-    analyze_nps,
-    format_nps_results_text,
-)
-
+# Lightweight imports - needed at startup
 from .device_database import (
     DeviceConfig,
     DeviceDatabase,
@@ -45,3 +16,40 @@ from .utils import (
     format_fr,
     parse_float_fr,
 )
+
+# Lazy imports for heavy modules (pydicom, numpy, scipy)
+_LAZY_IMPORTS = {
+    # dicom_loader
+    "DicomImage": ".dicom_loader",
+    "DicomSeries": ".dicom_loader",
+    "load_dicom_file": ".dicom_loader",
+    "load_dicom_folder": ".dicom_loader",
+    "detect_phantom_center": ".dicom_loader",
+    "estimate_phantom_diameter": ".dicom_loader",
+    # water_phantom
+    "ROIDefinition": ".water_phantom",
+    "ROIMeasurement": ".water_phantom",
+    "WaterPhantomROIs": ".water_phantom",
+    "WaterPhantomResults": ".water_phantom",
+    "calculate_rois": ".water_phantom",
+    "measure_roi": ".water_phantom",
+    "analyze_water_phantom": ".water_phantom",
+    "format_results_text": ".water_phantom",
+    # nps
+    "NPSROIPosition": ".nps",
+    "NPSROIConfig": ".nps",
+    "NPSResult": ".nps",
+    "ROIUniformityWarning": ".nps",
+    "calculate_nps_roi_positions": ".nps",
+    "analyze_nps": ".nps",
+    "format_nps_results_text": ".nps",
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_IMPORTS:
+        module_name = _LAZY_IMPORTS[name]
+        import importlib
+        module = importlib.import_module(module_name, __package__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
