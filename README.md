@@ -79,21 +79,7 @@ Plusieurs méthodes d'installation sont disponibles, décrites ici par ordre de 
    ./install-linux.sh
    ```
 
-**macOS : (non testé !!!)**
-1. Téléchargez le script d'installation :
-   ```bash
-   curl -O https://raw.githubusercontent.com/lammour/cq-tdm/main/installers/install-macos.sh
-   ```
-2. Rendez le script exécutable :
-   ```bash
-   chmod +x install-macos.sh
-   ```
-3. Exécutez le script :
-   ```bash
-   ./install-macos.sh
-   ```
-
-Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Démarrer/Applications (ou ~/Applications sur macOS).
+Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Démarrer/Applications.
 
 ### Méthode 2 : Téléchargement direct des exécutables
 
@@ -103,8 +89,6 @@ Des exécutables pré-compilés sont disponibles :
 |------------|----------------|
 | Windows | [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) |
 | Linux | [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) |
-| macOS (Apple Silicon) | [CQ_TDM-macos-arm64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-arm64) |
-| macOS (Intel) | [CQ_TDM-macos-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-macos-x86_64) |
 
 > **Note pour Windows :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
 
@@ -140,12 +124,6 @@ pipx uninstall cq-tdm
 rm -f ~/.local/share/applications/cq-tdm.desktop
 rm -f ~/.local/share/icons/cq-tdm.png
 rm -f ~/Desktop/cq-tdm.desktop
-```
-
-**macOS :**
-```bash
-pipx uninstall cq-tdm
-rm -rf ~/Applications/CQ\ TDM.app
 ```
 
 ## Installation pour le développement

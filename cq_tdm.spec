@@ -72,5 +72,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add icon path here if you have one: 'icon.ico' for Windows, 'icon.icns' for macOS
+    icon=None,  # Add icon path here if you have one: 'icon.ico' for Windows
 )
