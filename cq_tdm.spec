@@ -18,6 +18,12 @@ a = Analysis(
         # (str(project_root / 'references'), 'references'),
     ],
     hiddenimports=[
+        # Lazy-loaded project modules (importlib.import_module)
+        'cq_tdm.core.dicom_loader',
+        'cq_tdm.core.water_phantom',
+        'cq_tdm.core.nps',
+        'cq_tdm.reports.pdf_report',
+        # Third-party
         'PySide6.QtCore',
         'PySide6.QtGui',
         'PySide6.QtWidgets',
