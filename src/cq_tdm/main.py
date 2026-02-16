@@ -96,7 +96,21 @@ def main():
     if icon_path:
         app.setWindowIcon(QIcon(str(icon_path)))
 
+    # Parse --size WxH (e.g. --size 1360x880)
+    window_size = None
+    args = app.arguments()
+    for i, arg in enumerate(args):
+        if arg == "--size" and i + 1 < len(args):
+            try:
+                w, h = args[i + 1].split("x")
+                window_size = (int(w), int(h))
+            except ValueError:
+                pass
+            break
+
     window = MainWindow()
+    if window_size:
+        window.resize(*window_size)
     window.show()
 
     sys.exit(app.exec())
