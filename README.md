@@ -61,8 +61,8 @@ Plusieurs méthodes d'installation sont disponibles. Toutes peuvent être réali
 
 **Méthode recommandée : Programme d'installation**
 
-1. Téléchargez le programme d'installation depuis la [page des releases](https://github.com/lammour/cq-tdm/releases/latest)
-2. Double-cliquez sur `CQ_TDM_x.x.x_Setup.exe` pour lancer l'assistant d'installation
+1. Téléchargez [`CQ_TDM_Setup_Windows.exe`](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM_Setup_Windows.exe)
+2. Double-cliquez pour lancer l'assistant d'installation
 
 L'assistant installe l'application, crée un raccourci dans le menu Démarrer et permet la désinstallation via « Ajout/Suppression de programmes ».
 
@@ -70,7 +70,7 @@ L'assistant installe l'application, crée un raccourci dans le menu Démarrer et
 
 **Alternative : Exécutable portable**
 
-Téléchargez [CQ_TDM-windows-x86_64.exe](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-windows-x86_64.exe) — aucune installation requise.
+Téléchargez [`CQ_TDM_Portable_Windows.exe`](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM_Portable_Windows.exe) — aucune installation requise.
 
 > **Note :** L'exécutable n'est pas signé numériquement. Windows affichera un avertissement de sécurité. Cliquez sur "Informations complémentaires" → "Exécuter quand même" pour continuer.
 
@@ -97,7 +97,7 @@ Le script installe l'application sous le nom **CQ TDM** et crée un raccourci da
 
 **Alternative : Exécutable portable**
 
-Téléchargez [CQ_TDM-linux-x86_64](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM-linux-x86_64) — aucune installation requise.
+Téléchargez [`CQ_TDM_Portable_Linux`](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM_Portable_Linux) — aucune installation requise.
 
 ### pip / pipx
 
