@@ -29,11 +29,17 @@ jobs:
       - name: Build portable executable
         run: pyinstaller cq_tdm.spec
 
+      - name: Smoke test portable executable
+        run: dist\CQ_TDM.exe --version
+
       - name: Rename portable executable
         run: ren dist\CQ_TDM.exe CQ_TDM_Portable_Windows.exe
 
       - name: Build installer folder
         run: pyinstaller installers/cq_tdm_installer.spec
+
+      - name: Smoke test installer executable
+        run: dist\CQ_TDM_installer\CQ_TDM.exe --version
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
