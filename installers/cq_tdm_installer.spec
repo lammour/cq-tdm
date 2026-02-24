@@ -125,6 +125,10 @@ coll = COLLECT(
     a.datas,
     strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        'python3*.dll',
+        'vcruntime*.dll',
+        '*.pyd',
+    ],
     name='CQ_TDM_installer',
 )

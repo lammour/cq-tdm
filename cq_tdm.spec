@@ -104,7 +104,11 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        'python3*.dll',
+        'vcruntime*.dll',
+        '*.pyd',
+    ],
     runtime_tmpdir=None,
     console=False,  # Set to True for debugging
     disable_windowed_traceback=False,
