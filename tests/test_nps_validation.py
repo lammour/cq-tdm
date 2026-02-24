@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+from cq_tdm import __version__
 from cq_tdm.core.dicom_loader import DicomSeries, load_dicom_folder
 from cq_tdm.core.nps import NPSROIConfig, analyze_nps
 
@@ -778,7 +779,7 @@ def generate_combined_validation_figure(test_data_dir: Path, output_dir: Path) -
 
     ax_table.set_title("Mean Frequency Comparison\n(ANSM tolerance: ≤10%)", fontsize=11, fontweight="bold")
 
-    plt.suptitle("NPS Validation: CQ TDM vs ANSM Reference", fontsize=14, fontweight="bold")
+    plt.suptitle(f"NPS Validation: CQ TDM v{__version__} vs ANSM Reference", fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
 
@@ -970,7 +971,7 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
     )
 
-    plt.suptitle("NPS ROI Position Comparison: CQ TDM vs ANSM Reference",
+    plt.suptitle(f"NPS ROI Position Comparison: CQ TDM v{__version__} vs ANSM Reference",
                  fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
