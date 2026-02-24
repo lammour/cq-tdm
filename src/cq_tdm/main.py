@@ -74,6 +74,11 @@ def _create_dark_palette() -> QPalette:
 
 def main():
     """Launch the CQ TDM application."""
+    if "--version" in sys.argv:
+        from cq_tdm import __version__
+        print(f"CQ TDM {__version__}")
+        sys.exit(0)
+
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
     from cq_tdm import __version__
