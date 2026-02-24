@@ -813,7 +813,10 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
         ("Serie_4", "S4"),
     ]
 
-    # Create figure: 2 rows x 3 cols (5 plots + 1 legend)
+    # Collect results for summary table
+    results_data = []
+
+    # Create figure: 2 rows x 3 cols (5 plots + 1 summary)
     fig = plt.figure(figsize=(15, 10))
 
     for idx, (series_name, dicom_subdir) in enumerate(series_list):
@@ -847,11 +850,24 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
         middle_idx = len(series.images) // 2
         middle_image = series.images[middle_idx]
         pixel_array = middle_image.pixel_array
+        pixel_size = middle_image.pixel_size_mm
 
         # Detect phantom center and diameter
         center_row, center_col = detect_phantom_center(middle_image)
         diameter_pixels = estimate_phantom_diameter(middle_image, (center_row, center_col))
         radius_pixels = diameter_pixels / 2
+
+        # Compute mean distance between reference and auto-detected ROI centers
+        distances = []
+        for ref_roi, our_roi in zip(ref_config.rois, result.roi_config.rois):
+            dist_px = np.sqrt((ref_roi.x - our_roi.x) ** 2 + (ref_roi.y - our_roi.y) ** 2)
+            distances.append(dist_px * pixel_size)
+        mean_dist_mm = np.mean(distances)
+
+        results_data.append({
+            "series": series_name,
+            "mean_dist_mm": mean_dist_mm,
+        })
 
         # Create subplot
         ax = fig.add_subplot(2, 3, idx + 1)
@@ -911,12 +927,12 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
             )
             ax.add_patch(rect)
 
-        ax.set_title(f"{series_name}")
+        ax.set_title(f"{series_name} (mean offset: {mean_dist_mm:.1f} mm)")
         ax.axis("off")
 
-    # Create legend in position 6
-    ax_legend = fig.add_subplot(2, 3, 6)
-    ax_legend.axis("off")
+    # Create legend + summary table in position 6
+    ax_summary = fig.add_subplot(2, 3, 6)
+    ax_summary.axis("off")
 
     # Create legend patches
     from matplotlib.patches import Patch
@@ -932,44 +948,52 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
                linestyle="none", label="Detected phantom center"),
     ]
 
-    ax_legend.legend(
+    ax_summary.legend(
         handles=legend_elements,
-        loc="center",
-        fontsize=11,
+        loc="upper center",
+        fontsize=10,
         frameon=True,
         fancybox=True,
         shadow=True,
     )
 
-    # Add explanation text
-    explanation = """
-    ROI Position Comparison
+    # Build summary table: ROI position accuracy
+    threshold_mm = 5.0
 
-    Each subplot shows a middle slice from
-    the water phantom DICOM series.
+    table_data = [["Series", "Mean offset\n(mm)", "Status"]]
+    for r in results_data:
+        status = "\u2713 PASS" if r["mean_dist_mm"] <= threshold_mm else "\u2717 FAIL"
+        table_data.append([
+            r["series"],
+            f"{r['mean_dist_mm']:.1f}",
+            status,
+        ])
 
-    Green circle: Auto-detected phantom
-    perimeter from CQ TDM
+    avg_dist = (sum(r["mean_dist_mm"] for r in results_data) / len(results_data)
+                if results_data else 0)
+    table_data.append(["Average", f"{avg_dist:.1f}", ""])
 
-    Green cross: Auto-detected phantom center
-
-    Blue squares: Reference ROI positions
-    from ANSM validation dataset
-
-    Red dashed squares: Auto-detected ROI
-    positions from CQ TDM algorithm
-    """
-
-    ax_legend.text(
-        0.5, 0.25,
-        explanation,
-        transform=ax_legend.transAxes,
-        fontsize=9,
-        verticalalignment="top",
-        horizontalalignment="center",
-        fontfamily="monospace",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    table = ax_summary.table(
+        cellText=table_data,
+        loc="center",
+        cellLoc="center",
+        colWidths=[0.3, 0.3, 0.25],
     )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.2, 1.8)
+
+    # Style header row
+    for j in range(3):
+        table[(0, j)].set_facecolor("#4472C4")
+        table[(0, j)].set_text_props(color="white", fontweight="bold")
+
+    # Style status column
+    for i, r in enumerate(results_data, 1):
+        if r["mean_dist_mm"] <= threshold_mm:
+            table[(i, 2)].set_facecolor("#C6EFCE")
+        else:
+            table[(i, 2)].set_facecolor("#FFC7CE")
 
     plt.suptitle(f"NPS ROI Position Comparison: CQ TDM v{__version__} vs ANSM Reference",
                  fontsize=14, fontweight="bold")
