@@ -107,7 +107,7 @@ exe = EXE(
     name='CQ_TDM',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=False,
     upx=False,
     console=False,
     disable_windowed_traceback=False,
@@ -123,7 +123,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=True,
+    strip=False,
     upx=False,
     name='CQ_TDM_installer',
 )
