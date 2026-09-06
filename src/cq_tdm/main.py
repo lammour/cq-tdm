@@ -7,6 +7,16 @@ from pathlib import Path
 # Suppress Qt image IO warnings (e.g., ICC profile warnings for PNG files)
 os.environ["QT_LOGGING_RULES"] = "qt.gui.imageio=false"
 
+if sys.platform.startswith("linux"):
+    # Load matplotlib's FreeType binding before Qt. When Qt's bundled libfreetype is
+    # loaded first, matplotlib text rendering fails with "FT_Render_Glyph ... raster
+    # overflow" and the NPS plot / PDF figures cannot be produced (seen with
+    # PySide6 6.11 + matplotlib 3.11). Costs ~0.2 s at startup on Linux only.
+    try:
+        import matplotlib.ft2font  # noqa: F401
+    except Exception:
+        pass
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette, QColor, QIcon
 from PySide6.QtWidgets import QApplication
