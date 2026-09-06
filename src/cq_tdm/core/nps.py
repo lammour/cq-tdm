@@ -14,6 +14,11 @@ import numpy as np
 
 from .dicom_loader import DicomImage, DicomSeries, detect_phantom_center, estimate_phantom_diameter
 
+# numpy 2.0 renamed trapz -> trapezoid; scipy.integrate.trapezoid gives identical
+# results but pulls in scipy.linalg/sparse/optimize, which are excluded from the
+# frozen executables to keep them small.
+_trapezoid = getattr(np, "trapezoid", None) or getattr(np, "trapz")
+
 
 @dataclass
 class NPSROIPosition:
@@ -624,10 +629,9 @@ def analyze_nps(
     # Compute mean frequency (centroid of FITTED NPS curve)
     # f_mean = ∫ f * NPS(f) df / ∫ NPS(f) df
     # Use trapezoid integration for better accuracy
-    from scipy import integrate
-    total_power = integrate.trapezoid(nps_radial_fit, freq_radial)
+    total_power = _trapezoid(nps_radial_fit, freq_radial)
     if total_power > 0:
-        mean_frequency = integrate.trapezoid(freq_radial * nps_radial_fit, freq_radial) / total_power
+        mean_frequency = _trapezoid(freq_radial * nps_radial_fit, freq_radial) / total_power
     else:
         mean_frequency = 0.0
 
