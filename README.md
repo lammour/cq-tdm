@@ -95,10 +95,6 @@ Testé sous Ubuntu 24.04.3 LTS.
 
 Le script installe l'application sous le nom **CQ TDM** et crée un raccourci dans le menu Applications.
 
-**Alternative : Exécutable portable**
-
-Téléchargez [`CQ_TDM_Portable_Linux`](https://github.com/lammour/cq-tdm/releases/latest/download/CQ_TDM_Portable_Linux) — aucune installation requise.
-
 ### pip / pipx
 
 1. Installez pip ou [pipx](https://pipx.pypa.io/) (recommandé)
