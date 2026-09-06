@@ -72,12 +72,56 @@ def _create_dark_palette() -> QPalette:
     return palette
 
 
+def _check_dependencies() -> int:
+    """Import every runtime dependency and lazily-loaded module; return exit code.
+
+    Used by the CI smoke test on the frozen executables so that a package
+    missing from the bundle is caught at build time instead of by users.
+    """
+    import importlib
+
+    modules = [
+        "numpy",
+        "scipy.ndimage",
+        "pydicom",
+        "PIL.Image",
+        "matplotlib.pyplot",
+        "matplotlib.backends.backend_agg",
+        "matplotlib.patches",
+        "reportlab.platypus",
+        "reportlab.pdfbase.ttfonts",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets",
+        "cq_tdm.core.dicom_loader",
+        "cq_tdm.core.water_phantom",
+        "cq_tdm.core.nps",
+        "cq_tdm.reports.pdf_report",
+    ]
+    failures = []
+    for name in modules:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - report every failure
+            failures.append(f"{name}: {exc}")
+    if failures:
+        print("Missing or broken dependencies:")
+        for line in failures:
+            print(f"  {line}")
+        return 1
+    print(f"All {len(modules)} runtime modules imported successfully")
+    return 0
+
+
 def main():
     """Launch the CQ TDM application."""
     if "--version" in sys.argv:
         from cq_tdm import __version__
         print(f"CQ TDM {__version__}")
         sys.exit(0)
+
+    if "--check-deps" in sys.argv:
+        sys.exit(_check_dependencies())
 
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
