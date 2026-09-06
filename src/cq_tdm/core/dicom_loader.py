@@ -73,6 +73,8 @@ class DicomSeries:
     """Represents a series of DICOM images."""
 
     images: list[DicomImage] = field(default_factory=list)
+    # Files in the folder that could not be loaded, as "filename: reason"
+    load_errors: list[str] = field(default_factory=list)
 
     @property
     def num_images(self) -> int:
@@ -89,8 +91,8 @@ class DicomSeries:
         return np.stack([img.pixel_array for img in self.images], axis=0)
 
     def sort_by_location(self):
-        """Sort images by slice location."""
-        self.images.sort(key=lambda x: x.slice_location)
+        """Sort images by slice location, then instance number for ties."""
+        self.images.sort(key=lambda x: (x.slice_location, x.instance_number))
 
     def sort_by_instance(self):
         """Sort images by instance number."""
@@ -140,7 +142,29 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
 
     # Get pixel array and convert to HU
     pixel_array = ds.pixel_array
+    if pixel_array.ndim != 2:
+        # RGB secondary captures (dose reports, screenshots) are not CT slices
+        raise ValueError(f"Not a single-frame grayscale image (shape {pixel_array.shape})")
     hu_array = _apply_modality_lut(ds, pixel_array)
+
+    # Slice position: SliceLocation is optional; fall back to the z component of
+    # ImagePositionPatient so slices are still ordered correctly without it.
+    slice_location = _get_attr(ds, 'SliceLocation', None)
+    if slice_location is None:
+        position = _get_attr(ds, 'ImagePositionPatient', None)
+        if position is not None and len(position) == 3:
+            slice_location = position[2]
+    try:
+        slice_location = float(slice_location) if slice_location is not None else 0.0
+    except (TypeError, ValueError):
+        slice_location = 0.0
+
+    # Convolution kernel can be multi-valued (e.g. Siemens ['Br40', '3'])
+    kernel_raw = _get_attr(ds, 'ConvolutionKernel', '')
+    if hasattr(kernel_raw, '__iter__') and not isinstance(kernel_raw, str):
+        convolution_kernel = '/'.join(str(k) for k in kernel_raw)
+    else:
+        convolution_kernel = str(kernel_raw)
 
     # Extract pixel spacing
     pixel_spacing = _get_attr(ds, 'PixelSpacing', [1.0, 1.0])
@@ -173,7 +197,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         series_description=str(_get_attr(ds, 'SeriesDescription', '')),
         series_number=int(_get_attr(ds, 'SeriesNumber', 0)),
         instance_number=int(_get_attr(ds, 'InstanceNumber', 0)),
-        slice_location=float(_get_attr(ds, 'SliceLocation', 0.0)),
+        slice_location=slice_location,
         slice_thickness=float(_get_attr(ds, 'SliceThickness', 0.0)),
         manufacturer=str(_get_attr(ds, 'Manufacturer', '')),
         model_name=str(_get_attr(ds, 'ManufacturerModelName', '')),
@@ -182,7 +206,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         kvp=float(_get_attr(ds, 'KVP', 0.0)),
         tube_current=float(_get_attr(ds, 'XRayTubeCurrent', 0.0)),
         exposure_time=float(_get_attr(ds, 'ExposureTime', 0.0)),
-        convolution_kernel=str(_get_attr(ds, 'ConvolutionKernel', '')),
+        convolution_kernel=convolution_kernel,
         focal_spots=focal_spots,
         study_time=str(_get_attr(ds, 'StudyTime', '')),
         acquisition_time=str(_get_attr(ds, 'AcquisitionTime', '')),
@@ -227,8 +251,10 @@ def load_dicom_folder(folder_path: str | Path) -> DicomSeries:
         try:
             image = load_dicom_file(file_path)
             series.images.append(image)
-        except Exception:
-            # Skip files that can't be loaded as DICOM
+        except Exception as e:
+            # Skip files that can't be loaded as DICOM, but keep the reason so the
+            # GUI can explain an empty result (e.g. compressed transfer syntax)
+            series.load_errors.append(f"{file_path.name}: {e}")
             continue
 
     # Sort by slice location
