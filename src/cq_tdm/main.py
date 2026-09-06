@@ -123,6 +123,74 @@ def _check_dependencies() -> int:
     return 0
 
 
+def _crash_log_path() -> Path:
+    """Path of the crash log, next to settings.json in the user config directory."""
+    from cq_tdm.core.app_config import AppConfig
+    return AppConfig.config_dir() / "cq_tdm.log"
+
+
+def _write_crash_log(text: str) -> Path | None:
+    """Append text to the crash log; return its path, or None if it cannot be written."""
+    try:
+        log_path = _crash_log_path()
+        # Keep the log bounded: roll over once it exceeds 1 MB
+        if log_path.exists() and log_path.stat().st_size > 1_000_000:
+            log_path.replace(log_path.with_suffix(".log.1"))
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(text)
+        return log_path
+    except OSError:
+        return None
+
+
+def _handle_uncaught_exception(exc_type, exc_value, exc_tb):
+    """Log an unhandled exception and show it to the user.
+
+    In the windowed executable stdout/stderr do not exist, so without this an
+    exception raised inside a Qt slot vanishes and the user only sees that
+    "nothing happens". PySide6 routes such exceptions through sys.excepthook.
+    """
+    import traceback
+    from datetime import datetime
+
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+
+    from cq_tdm import __version__
+    details = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_path = _write_crash_log(
+        f"\n===== {stamp} | CQ TDM {__version__} | Python {sys.version.split()[0]}"
+        f" | {sys.platform} =====\n{details}"
+    )
+
+    # Also print when a console is available (development runs)
+    if sys.stderr is not None:
+        sys.stderr.write(details)
+
+    try:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        if QApplication.instance() is None:
+            return
+        summary = f"{exc_type.__name__}: {exc_value}"
+        where = (
+            f"Le détail a été enregistré dans :\n{log_path}"
+            if log_path else "Le détail n'a pas pu être enregistré dans un fichier journal."
+        )
+        box = QMessageBox(
+            QMessageBox.Icon.Critical,
+            "Erreur inattendue",
+            "Une erreur inattendue s'est produite. L'opération en cours a été interrompue.\n\n"
+            f"{summary}\n\n{where}\n\n"
+            "Merci de joindre ce fichier à tout signalement de problème.",
+        )
+        box.setDetailedText(details)
+        box.exec()
+    except Exception:
+        pass  # Never let the error handler itself crash the application
+
+
 def main():
     """Launch the CQ TDM application."""
     if "--version" in sys.argv:
@@ -132,6 +200,8 @@ def main():
 
     if "--check-deps" in sys.argv:
         sys.exit(_check_dependencies())
+
+    sys.excepthook = _handle_uncaught_exception
 
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
