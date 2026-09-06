@@ -136,3 +136,12 @@ pip install -e .
 4. Enregistrer
 5. Vérifier les artéfacts
 6. Générer le rapport PDF
+
+## Signaler un problème
+
+En cas d'erreur inattendue, l'application affiche un message et enregistre le détail dans un fichier journal `cq_tdm.log`, situé dans le dossier de configuration :
+
+- Windows : `%LOCALAPPDATA%\cq_tdm\`
+- GNU/Linux : `~/.config/cq_tdm/`
+
+Merci de joindre ce fichier à tout signalement sur [GitHub](https://github.com/lammour/cq-tdm/issues).
