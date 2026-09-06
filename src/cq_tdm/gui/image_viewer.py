@@ -1422,12 +1422,23 @@ class ImageViewerWidget(QWidget):
         """Get the HU analysis slice index (0-based)."""
         return self.hu_slice_spin.value() - 1
 
+    def _clamp_slice(self, slice_index: int) -> int:
+        """Clamp a 0-based slice index to the range of the loaded series.
+
+        Saved device slice values may come from a longer series; the spinboxes
+        would clamp silently while the raw value was still emitted to the analysis.
+        """
+        lo = self.hu_slice_spin.minimum() - 1
+        hi = self.hu_slice_spin.maximum() - 1
+        return max(lo, min(int(slice_index), hi))
+
     def get_nps_slice_range(self) -> tuple[int, int]:
         """Get the NPS analysis slice range (0-based, inclusive)."""
         return (self.nps_start_spin.value() - 1, self.nps_end_spin.value() - 1)
 
     def set_hu_slice_index(self, slice_index: int):
-        """Set the HU analysis slice index (0-based)."""
+        """Set the HU analysis slice index (0-based), clamped to the loaded series."""
+        slice_index = self._clamp_slice(slice_index)
         # Block signals to avoid triggering analysis during programmatic change
         self.hu_slice_spin.blockSignals(True)
         self.hu_slice_spin.setValue(slice_index + 1)  # Convert to 1-based
@@ -1437,7 +1448,11 @@ class ImageViewerWidget(QWidget):
         self.hu_slice_changed.emit(slice_index)
 
     def set_nps_slice_range(self, start: int, end: int):
-        """Set the NPS analysis slice range (0-based, inclusive)."""
+        """Set the NPS analysis slice range (0-based, inclusive), clamped to the series."""
+        start = self._clamp_slice(start)
+        end = self._clamp_slice(end)
+        if end < start:
+            start, end = end, start
         # Block signals to avoid triggering analysis during programmatic change
         self.nps_start_spin.blockSignals(True)
         self.nps_end_spin.blockSignals(True)
