@@ -41,19 +41,30 @@ class AppConfig:
 
     @classmethod
     def load(cls) -> "AppConfig":
-        """Load config from file, creating it with defaults if missing."""
+        """Load config from file, creating it with defaults if missing.
+
+        An unreadable file is renamed to settings.json.bak before defaults are
+        written, so the user's custom database path and logo settings can be
+        recovered by hand.
+        """
         config_path = cls.config_path()
         if config_path.exists():
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-            except (json.JSONDecodeError, TypeError) as e:
-                print(f"Warning: Could not load app config: {e}")
+                return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+            except (OSError, ValueError, TypeError):
+                try:
+                    config_path.replace(config_path.with_suffix(".json.bak"))
+                except OSError:
+                    pass
 
         # Create new config with defaults and save it
         config = cls()
-        config.save()
+        try:
+            config.save()
+        except OSError:
+            pass  # Read-only config dir: run with defaults, do not crash at startup
         return config
 
     def save(self):
