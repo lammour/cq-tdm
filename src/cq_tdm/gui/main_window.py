@@ -834,6 +834,8 @@ class MainWindow(QMainWindow):
         db_path = Path(config.device_database_path) if config.device_database_path else None
         self._device_db = DeviceDatabase(db_path)
         self._current_device: DeviceConfig | None = None
+        if self._device_db.load_error:
+            QTimer.singleShot(0, self._warn_device_db_load_error)
 
         # Report metadata (empty by default, shown as grey placeholders in UI)
         self._hospital_name: str = ""
@@ -1477,12 +1479,24 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             if series.is_empty:
                 self.statusbar.showMessage("Aucun fichier DICOM trouvé")
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Attention", "Aucun fichier DICOM trouvé dans ce dossier.")
+                message = "Aucun fichier DICOM trouvé dans ce dossier."
+                if series.load_errors:
+                    message += (
+                        f"\n\n{len(series.load_errors)} fichier(s) n'ont pas pu être lus."
+                        f"\nPremière erreur : {series.load_errors[0]}"
+                    )
+                QMessageBox.warning(self, "Attention", message)
                 return
 
             self._current_series = series
+            # Reset all results so a failed analysis on the new series cannot leave
+            # the previous series' numbers in the panel or in the PDF
+            self._current_results = None
+            self._nps_results = None
             self._artifact_result = None  # Reset artifact result for new series
             self._artifact_description = ""
+            self.btn_export.setEnabled(False)
+            self._update_results_display()
 
             # Enable artifact inspection button
             self.btn_artifact.setEnabled(True)
@@ -1627,9 +1641,17 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     if 0 <= nps_middle_index < self._current_series.num_images:
                         nps_middle_image = self._current_series.images[nps_middle_index]
 
+                # Report on the slice that was analysed (HU slice), not the one
+                # currently browsed in the viewer
+                report_image = self._current_image
+                if self._current_series is not None:
+                    hu_index = self.image_viewer.get_hu_slice_index()
+                    if 0 <= hu_index < self._current_series.num_images:
+                        report_image = self._current_series.images[hu_index]
+
                 generate_pdf_report(
                     file_path,
-                    self._current_image,
+                    report_image,
                     self._current_results,
                     self._nps_results,
                     artifact_result,
@@ -1897,6 +1919,9 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             self.btn_export.setEnabled(True)
 
         except Exception as e:
+            self._current_results = None
+            self._update_results_display()
+            self.btn_export.setEnabled(self._nps_results is not None)
             self.statusbar.showMessage(f"Erreur analyse UH: {e}")
 
     def _on_nps_range_changed(self, start: int, end: int):
@@ -1935,6 +1960,9 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             self.statusbar.showMessage("Analyse SPB terminée", 3000)
 
         except Exception as e:
+            self._nps_results = None
+            self._update_results_display()
+            self.btn_export.setEnabled(self._current_results is not None)
             self.statusbar.showMessage(f"Erreur analyse SPB: {e}")
 
     def _on_reference_field_changed(self):
@@ -2070,6 +2098,17 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             <p style="font-size: 11px;">Ouvrez un dossier DICOM pour lancer l'analyse</p>
         </div>
         """
+
+    def _warn_device_db_load_error(self):
+        """Tell the user the device database file could not be read."""
+        QMessageBox.warning(
+            self,
+            "Base de données des appareils",
+            "Le fichier de la base de données des appareils n'a pas pu être lu.\n"
+            "Une copie a été enregistrée avec l'extension .bak et l'application "
+            "démarre avec une base vide.\n\n"
+            f"Détail : {self._device_db.load_error}",
+        )
 
     def _update_results_display(self):
         """Update the results browser with current results."""
