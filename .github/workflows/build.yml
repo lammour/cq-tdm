@@ -30,7 +30,9 @@ jobs:
         run: pyinstaller cq_tdm.spec
 
       - name: Smoke test portable executable
-        run: dist\CQ_TDM.exe --version
+        run: |
+          dist\CQ_TDM.exe --version
+          dist\CQ_TDM.exe --check-deps
 
       - name: Rename portable executable
         run: ren dist\CQ_TDM.exe CQ_TDM_Portable_Windows.exe
@@ -39,7 +41,9 @@ jobs:
         run: pyinstaller installers/cq_tdm_installer.spec
 
       - name: Smoke test installer executable
-        run: dist\CQ_TDM_installer\CQ_TDM.exe --version
+        run: |
+          dist\CQ_TDM_installer\CQ_TDM.exe --version
+          dist\CQ_TDM_installer\CQ_TDM.exe --check-deps
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
