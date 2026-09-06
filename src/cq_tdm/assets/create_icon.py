@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Generate CQ TDM application icon."""
 
-import math
 from pathlib import Path
 
 def create_svg_icon() -> str:
@@ -125,7 +124,6 @@ def main():
 
     # Try to create PNG and ICO using available tools
     try:
-        import subprocess
         from io import BytesIO
 
         # Check for cairosvg (Python library)

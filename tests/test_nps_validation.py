@@ -18,7 +18,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pytest
 
 from cq_tdm import __version__
 from cq_tdm.core.dicom_loader import DicomSeries, load_dicom_folder

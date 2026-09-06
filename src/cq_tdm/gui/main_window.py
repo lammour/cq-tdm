@@ -1603,7 +1603,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         )
         if file_path:
             try:
-                self.statusbar.showMessage(f"Génération du rapport...")
+                self.statusbar.showMessage("Génération du rapport...")
 
                 # Create artifact result if inspection was performed
                 artifact_result = None

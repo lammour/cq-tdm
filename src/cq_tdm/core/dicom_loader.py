@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
 import numpy as np
 import pydicom
 from pydicom.dataset import Dataset

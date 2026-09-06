@@ -12,7 +12,7 @@ ROI specifications:
   - Position: 10-15mm from phantom wall
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 import numpy as np
 
@@ -331,12 +331,12 @@ def format_results_text(results: WaterPhantomResults) -> str:
         "",
         "NOMBRE CT DE L'EAU",
         f"  Valeur centrale: {results.water_ct_number:+.1f} HU",
-        f"  Critère: ±7 HU (NCG: ±25 HU)",
+        "  Critère: ±7 HU (NCG: ±25 HU)",
         f"  Statut: {'✓ CONFORME' if results.water_ct_acceptable else ('✗ NCG' if results.water_ct_ncg else '✗ NON CONFORME')}",
         "",
         "UNIFORMITÉ",
         f"  Écart max centre-périphérie: {results.uniformity:.1f} HU",
-        f"  Critère: ≤7 HU (NCG: >25 HU)",
+        "  Critère: ≤7 HU (NCG: >25 HU)",
         f"  Statut: {'✓ CONFORME' if results.uniformity_acceptable else ('✗ NCG' if results.uniformity_ncg else '✗ NON CONFORME')}",
         "",
         "BRUIT",
