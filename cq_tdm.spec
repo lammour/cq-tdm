@@ -14,8 +14,7 @@ a = Analysis(
     pathex=[str(project_root / 'src')],
     binaries=[],
     datas=[
-        # Include reference PDFs if needed (optional, comment out to reduce size)
-        # (str(project_root / 'references'), 'references'),
+        (str(project_root / 'src' / 'cq_tdm' / 'assets'), 'cq_tdm/assets'),
     ],
     hiddenimports=[
         # Lazy-loaded project modules (importlib.import_module)
@@ -31,8 +30,13 @@ a = Analysis(
         'numpy',
         'scipy',
         'scipy.ndimage',
-        'scipy.integrate',
         'pydicom',
+        'PIL',
+        'PIL.Image',
+        'matplotlib',
+        'matplotlib.pyplot',
+        'matplotlib.backends.backend_agg',
+        'matplotlib.patches',
         'reportlab',
         'reportlab.lib',
         'reportlab.lib.pagesizes',
@@ -42,7 +46,9 @@ a = Analysis(
         'reportlab.pdfgen',
     ],
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={
+        'matplotlib': {'backends': ['Agg']},
+    },
     runtime_hooks=[],
     excludes=[
         'tkinter',
@@ -64,25 +70,36 @@ a = Analysis(
         'PySide6.QtSensors',
         'PySide6.QtSerialPort',
         'PySide6.QtPositioning',
-        # Unused packages
-        'matplotlib',
-        'PIL',
-        'Pillow',
+        # Unused packages (matplotlib and PIL ARE used: NPS plots, PDF report figures, logo)
         'cairosvg',
         'cairocffi',
         'pygments',
-        'fonttools',
-        # Unused scipy submodules
+        # Unused matplotlib backends / optional deps
+        'matplotlib.backends.backend_qt5agg',
+        'matplotlib.backends.backend_qtagg',
+        'matplotlib.backends.backend_tkagg',
+        'matplotlib.backends.backend_webagg',
+        'matplotlib.backends.backend_nbagg',
+        'matplotlib.backends.backend_gtk3agg',
+        'matplotlib.backends.backend_gtk4agg',
+        'matplotlib.backends.backend_macosx',
+        'matplotlib.backends.backend_wx',
+        'matplotlib.backends.backend_wxagg',
+        'matplotlib.testing',
+        'IPython',
+        # Unused scipy submodules.
+        # NOTE: scipy.linalg and scipy.special must NOT be excluded: scipy.ndimage
+        # (used for NPS radial averaging) imports them at import time.
         'scipy.signal',
         'scipy.sparse',
         'scipy.spatial',
         'scipy.interpolate',
         'scipy.optimize',
-        'scipy.linalg',
         'scipy.stats',
         'scipy.io',
         'scipy.cluster',
         'scipy.fft',
+        'scipy.integrate',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -111,5 +128,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add icon path here if you have one: 'icon.ico' for Windows
+    icon=str(project_root / 'src' / 'cq_tdm' / 'assets' / 'icon.ico'),
 )
