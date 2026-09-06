@@ -1,7 +1,8 @@
 """Device database for storing CT scanner configurations."""
 
 import json
-from dataclasses import dataclass, asdict
+import shutil
+from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 from typing import Optional
 
@@ -125,6 +126,10 @@ class DeviceDatabase:
 
         self.db_path = db_path
         self._devices: dict[str, DeviceConfig] = {}
+        # Set when the existing file could not be read; the file is then backed up
+        # before any save so that a corrupt or newer-format database is never
+        # silently overwritten with an empty one.
+        self.load_error: str | None = None
         self._load()
 
     def _load(self):
@@ -132,15 +137,26 @@ class DeviceDatabase:
         if not self.db_path.exists():
             return
 
+        known_fields = {f.name for f in fields(DeviceConfig)}
         try:
             with open(self.db_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for device_data in data.get("devices", []):
-                    device = DeviceConfig(**device_data)
-                    self._devices[device.device_id] = device
-        except (json.JSONDecodeError, TypeError, KeyError) as e:
-            print(f"Warning: Could not load device database: {e}")
+            for device_data in data.get("devices", []):
+                # Ignore unknown keys so a file written by a newer version still loads
+                device = DeviceConfig(**{k: v for k, v in device_data.items() if k in known_fields})
+                self._devices[device.device_id] = device
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+            self.load_error = f"{self.db_path}: {e}"
             self._devices = {}
+            self._backup_unreadable_file()
+
+    def _backup_unreadable_file(self):
+        """Copy an unreadable database file aside so it is not lost on the next save."""
+        backup_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+        try:
+            shutil.copy2(self.db_path, backup_path)
+        except OSError:
+            pass
 
     def _save(self):
         """Save devices to the database file."""
