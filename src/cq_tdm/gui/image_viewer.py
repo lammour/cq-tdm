@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QPointF, QRectF, QPoint, QTimer
+from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QTimer
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QWheelEvent, QMouseEvent, QCursor, QShowEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QWidget,
@@ -17,12 +17,10 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QGraphicsScene,
     QGraphicsPixmapItem,
-    QGraphicsEllipseItem,
     QStyleOptionSlider,
     QStyle,
     QDialog,
     QPushButton,
-    QSizePolicy,
 )
 
 from ..core.app_config import get_app_config
