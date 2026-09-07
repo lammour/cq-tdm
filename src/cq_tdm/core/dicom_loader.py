@@ -20,6 +20,9 @@ class DicomImage:
 
     # Study info
     study_date: str = ""
+    # Date of the scan (DICOM DA): StudyDate, else SeriesDate, AcquisitionDate,
+    # ContentDate, InstanceCreationDate. Anonymised series often blank StudyDate.
+    acquisition_date: str = ""
     study_description: str = ""
 
     # Series info
@@ -40,8 +43,9 @@ class DicomImage:
 
     # Acquisition parameters
     kvp: float = 0.0
-    tube_current: float = 0.0
-    exposure_time: float = 0.0
+    tube_current: float = 0.0  # X-ray tube current (mA)
+    exposure_time: float = 0.0  # Exposure time (ms)
+    exposure: float = 0.0  # Exposure (mAs), DICOM (0018,1152)
     convolution_kernel: str = ""
     focal_spots: str = ""
     study_time: str = ""
@@ -67,6 +71,15 @@ class DicomImage:
     def pixel_size_mm(self) -> float:
         """Pixel size in mm (assumes square pixels)."""
         return self.pixel_spacing[0]
+
+    @property
+    def mas(self) -> float:
+        """Tube load in mAs: the Exposure tag, else current × time; 0 if unknown."""
+        if self.exposure > 0:
+            return self.exposure
+        if self.tube_current > 0 and self.exposure_time > 0:
+            return self.tube_current * self.exposure_time / 1000.0
+        return 0.0
 
 
 @dataclass
@@ -109,6 +122,23 @@ def _get_attr(ds: Dataset, attr: str, default=None):
         return value
     except Exception:
         return default
+
+
+_DATE_TAGS = ('StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate', 'InstanceCreationDate')
+
+
+def _scan_date(ds: Dataset) -> str:
+    """Date of the scan as DICOM DA (YYYYMMDD): first usable tag of ``_DATE_TAGS``.
+
+    Anonymised series (ANSM reference images among them) often blank StudyDate
+    while keeping a later tag; falling back avoids stamping the control with the
+    day of the analysis.
+    """
+    for tag in _DATE_TAGS:
+        value = str(_get_attr(ds, tag, '') or '').strip()
+        if len(value) >= 8 and value[:8].isdigit():
+            return value[:8]
+    return ""
 
 
 def _apply_modality_lut(ds: Dataset, pixel_array: np.ndarray) -> np.ndarray:
@@ -194,6 +224,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         patient_id=str(_get_attr(ds, 'PatientID', '')),
         patient_name=patient_name,
         study_date=str(_get_attr(ds, 'StudyDate', '')),
+        acquisition_date=_scan_date(ds),
         study_description=str(_get_attr(ds, 'StudyDescription', '')),
         series_description=str(_get_attr(ds, 'SeriesDescription', '')),
         series_instance_uid=str(_get_attr(ds, 'SeriesInstanceUID', '')),
@@ -208,6 +239,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         kvp=float(_get_attr(ds, 'KVP', 0.0)),
         tube_current=float(_get_attr(ds, 'XRayTubeCurrent', 0.0)),
         exposure_time=float(_get_attr(ds, 'ExposureTime', 0.0)),
+        exposure=float(_get_attr(ds, 'Exposure', 0.0)),
         convolution_kernel=convolution_kernel,
         focal_spots=focal_spots,
         study_time=str(_get_attr(ds, 'StudyTime', '')),

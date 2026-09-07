@@ -118,7 +118,7 @@ def render_trend_chart(
     ax.set_ylabel(label, color=pal["muted"], fontsize=8)
     if title:
         ax.set_title(title, color=pal["fg"], fontsize=9)
-    if band is not None and band[2] is not None or current is not None:
+    if ax.get_legend_handles_labels()[0]:
         ax.legend(loc="best", fontsize=7, facecolor=pal["bg"], edgecolor=pal["grid"],
                   labelcolor=pal["fg"])
     fig.tight_layout(pad=0.6)

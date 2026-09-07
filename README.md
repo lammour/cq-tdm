@@ -27,6 +27,7 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
   - Onglet « Historique » : tableau des contrôles et graphique de tendance par grandeur avec la bande de tolérance ANSM ; un clic sur un point sélectionne le contrôle
   - Définition des valeurs de référence à partir d'un contrôle passé, export CSV, ouverture du rapport PDF associé
+  - « Charger la série DICOM » : recharge les images d'un contrôle passé dans la visionneuse avec les coupes utilisées à l'époque ; si le dossier a été déplacé, il peut être localisé ou recherché dans un dossier d'archive, la série étant vérifiée par son identifiant DICOM
 - **Base de données des appareils** :
   - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification et des coupes de mesure
   - Détection automatique des appareils enregistrés

@@ -470,9 +470,9 @@ class TestNPSValidation:
         print(f"  Error:                {err_vs_iqmetrix:.2f}%")
         print(f"  Plot saved to:        {plot_path}")
 
-        # Assert within tolerance (5% for same ROIs)
-        assert err_vs_iqmetrix <= 15, (
-            f"{series_name}: Mean frequency error {err_vs_iqmetrix:.2f}% exceeds 15% "
+        # Assert within ANSM regulatory tolerance (10%)
+        assert err_vs_iqmetrix <= 10, (
+            f"{series_name}: Mean frequency error {err_vs_iqmetrix:.2f}% exceeds 10% "
             f"(ours: {result.mean_frequency:.4f}, ref: {ref_results.average_frequency:.4f})"
         )
 
@@ -547,8 +547,8 @@ class TestNPSValidation:
         print(f"  ROIs saved to:        {roi_plot_path}")
 
         # Assert within ANSM regulatory tolerance (10%)
-        assert err_vs_ref <= 15, (
-            f"{series_name}: Mean frequency error {err_vs_ref:.2f}% exceeds 15% "
+        assert err_vs_ref <= 10, (
+            f"{series_name}: Mean frequency error {err_vs_ref:.2f}% exceeds 10% "
             f"(ours: {result.mean_frequency:.4f}, ref: {ref_results.average_frequency:.4f})"
         )
 

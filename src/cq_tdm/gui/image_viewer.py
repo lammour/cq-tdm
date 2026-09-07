@@ -202,8 +202,11 @@ class MarkedSlider(QSlider):
         # Check water marker (yellow triangle) - above the groove, higher up
         if self._water_marker is not None:
             water_x = self._slice_to_x(self._water_marker)
-            # Hit area is above the groove (y < groove.top())
-            if abs(x - water_x) < hit_tolerance and y < groove.top():
+            # Hit area is above the groove and above the handle, so that clicking
+            # the top of the handle still drags the slider when both coincide
+            handle = self._get_handle_rect()
+            marker_bottom = min(groove.top(), handle.top())
+            if abs(x - water_x) < hit_tolerance and y < marker_bottom:
                 return self.DRAG_WATER
 
         # Check NPS range (now below the groove)
@@ -278,8 +281,11 @@ class MarkedSlider(QSlider):
                 # Translate entire NPS range
                 delta_x = x - self._drag_start_x
                 groove = self._get_groove_rect()
-                if groove.width() > 0:
-                    delta_slices = int(round(delta_x / groove.width() * (self.maximum() - self.minimum())))
+                handle = self._get_handle_rect()
+                # Same pixel -> slice scale as _slice_to_x / _x_to_slice
+                effective_width = groove.width() - handle.width()
+                if effective_width > 0:
+                    delta_slices = int(round(delta_x / effective_width * (self.maximum() - self.minimum())))
                     orig_start, orig_end = self._drag_start_nps
                     range_size = orig_end - orig_start
 
@@ -458,6 +464,10 @@ class ImageViewer(QGraphicsView):
         self._is_adjusting_wl: bool = False
         self._last_mouse_pos: QPoint | None = None
         self._wl_sensitivity: float = 1.0  # Sensitivity multiplier
+        # Right-drag window/level; disabled where a fixed window is mandated
+        # (artifact inspection at W=80 / L=0)
+        self.allow_window_level_drag: bool = True
+        self._cursor_before_wl: QCursor | None = None
 
         # Pending fit flag - for delayed fit after widget is shown
         self._pending_fit: bool = False
@@ -530,7 +540,7 @@ class ImageViewer(QGraphicsView):
         transform = self.transform()
         # Get scale factor from transform matrix
         self._current_zoom = transform.m11()  # Horizontal scale factor
-        self.zoom_changed.emit(int(self._current_zoom * 100))
+        self.zoom_changed.emit(round(self._current_zoom * 100))
 
     def set_window_level(self, window: int, level: int):
         """Set window and level values."""
@@ -666,7 +676,9 @@ class ImageViewer(QGraphicsView):
         if not self._debug_mode or self._debug_center is None:
             return
 
-        center_row, center_col = self._debug_center
+        # Pixel (row, col) is centred at (col + 0.5, row + 0.5) in scene units
+        center_row = self._debug_center[0] + 0.5
+        center_col = self._debug_center[1] + 0.5
 
         # Draw center crosshair (magenta)
         pen = QPen(QColor(255, 0, 255), 2)
@@ -748,10 +760,15 @@ class ImageViewer(QGraphicsView):
         pen = QPen(roi.color, 2)
         pen.setCosmetic(True)  # Constant width regardless of zoom
 
-        # Create shape (circle or square)
+        # Create shape (circle or square).
+        # A square ROI of side 2r extracted from rows/cols [c-r, c+r) covers the
+        # scene span [c-r, c+r] exactly. A circular mask is a set of pixels whose
+        # centres sit at index + 0.5 in scene units, so the circle is offset by
+        # half a pixel to sit on the pixels that are actually measured.
+        offset = 0.0 if roi.is_square else 0.5
         rect = QRectF(
-            roi.center_x - roi.radius,
-            roi.center_y - roi.radius,
+            roi.center_x + offset - roi.radius,
+            roi.center_y + offset - roi.radius,
             roi.radius * 2,
             roi.radius * 2,
         )
@@ -836,18 +853,18 @@ class ImageViewer(QGraphicsView):
                 self._auto_fit = False  # Disable auto-fit when user manually zooms
                 self.scale(factor, factor)
                 self._current_zoom = new_zoom
-                self.zoom_changed.emit(int(self._current_zoom * 100))
+                self.zoom_changed.emit(round(self._current_zoom * 100))
         else:
             new_zoom = self._current_zoom / factor
             if new_zoom >= self.MIN_ZOOM:
                 self._auto_fit = False  # Disable auto-fit when user manually zooms
                 self.scale(1 / factor, 1 / factor)
                 self._current_zoom = new_zoom
-                self.zoom_changed.emit(int(self._current_zoom * 100))
+                self.zoom_changed.emit(round(self._current_zoom * 100))
 
     def get_zoom_percent(self) -> int:
         """Get current zoom level as percentage."""
-        return int(self._current_zoom * 100)
+        return round(self._current_zoom * 100)
 
     def set_zoom_percent(self, percent: int):
         """Set zoom level from percentage."""
@@ -858,14 +875,18 @@ class ImageViewer(QGraphicsView):
             factor = new_zoom / self._current_zoom
             self.scale(factor, factor)
             self._current_zoom = new_zoom
-            self.zoom_changed.emit(int(self._current_zoom * 100))
+            self.zoom_changed.emit(round(self._current_zoom * 100))
 
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press - right click starts window/level adjustment."""
-        if event.button() == Qt.MouseButton.RightButton and self._image is not None:
+        if (event.button() == Qt.MouseButton.RightButton and self._image is not None
+                and self.allow_window_level_drag):
             self._is_adjusting_wl = True
             self._last_mouse_pos = event.pos()
-            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            # The viewport owns the visible cursor (ScrollHandDrag sets an open
+            # hand on it), so the cross must be set there, not on the view
+            self._cursor_before_wl = self.viewport().cursor()
+            self.viewport().setCursor(QCursor(Qt.CursorShape.CrossCursor))
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -892,10 +913,12 @@ class ImageViewer(QGraphicsView):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle mouse release - end window/level adjustment."""
-        if event.button() == Qt.MouseButton.RightButton:
+        if event.button() == Qt.MouseButton.RightButton and self._is_adjusting_wl:
             self._is_adjusting_wl = False
             self._last_mouse_pos = None
-            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            if self._cursor_before_wl is not None:
+                self.viewport().setCursor(self._cursor_before_wl)
+                self._cursor_before_wl = None
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -1474,6 +1497,16 @@ class ImageViewerWidget(QWidget):
 
     def _on_nps_range_changed(self):
         """Handle NPS range spinbox change."""
+        # Keep start <= end: the spinbox that was not edited follows the other
+        # one, so a reversed (empty) range can never reach the analysis
+        if self.nps_start_spin.value() > self.nps_end_spin.value():
+            if self.sender() is self.nps_start_spin:
+                follower, value = self.nps_end_spin, self.nps_start_spin.value()
+            else:
+                follower, value = self.nps_start_spin, self.nps_end_spin.value()
+            follower.blockSignals(True)
+            follower.setValue(value)
+            follower.blockSignals(False)
         start = self.nps_start_spin.value() - 1  # 0-based
         end = self.nps_end_spin.value() - 1  # 0-based
         # Update markers on slider
@@ -1558,6 +1591,8 @@ class ArtifactInspectionDialog(QDialog):
         # Image viewer (simplified, artifact window preset)
         self._viewer = ImageViewer()
         self._viewer.set_window_level(80, 0)  # Artifact window: W=80, L=0
+        # The ANSM window is mandatory for this inspection: no right-drag W/L
+        self._viewer.allow_window_level_drag = False
         # Disable drag mode to keep image fitted
         self._viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
         layout.addWidget(self._viewer, 1)
