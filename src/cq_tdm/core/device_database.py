@@ -2,11 +2,13 @@
 
 import json
 import shutil
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QStandardPaths
+
+from .qc_history import QCRun
 
 
 @dataclass
@@ -38,6 +40,25 @@ class DeviceConfig:
     hu_slice_index: int | None = None  # HU analysis slice index
     nps_start_slice: int | None = None  # NPS analysis start slice
     nps_end_slice: int | None = None  # NPS analysis end slice
+
+    # Recorded QC controls, newest last (see qc_history.QCRun)
+    runs: list[QCRun] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "runs"}
+        d["runs"] = [r.to_dict() for r in self.runs]
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DeviceConfig":
+        known = {f.name for f in fields(cls)} - {"runs"}
+        # Ignore unknown keys so a file written by a newer version still loads
+        device = cls(**{k: v for k, v in data.items() if k in known})
+        device.runs = [QCRun.from_dict(r) for r in data.get("runs", []) if isinstance(r, dict)]
+        return device
+
+    def find_run(self, run_id: str) -> Optional[QCRun]:
+        return next((r for r in self.runs if r.run_id == run_id), None)
 
     @classmethod
     def from_dicom(
@@ -137,13 +158,11 @@ class DeviceDatabase:
         if not self.db_path.exists():
             return
 
-        known_fields = {f.name for f in fields(DeviceConfig)}
         try:
             with open(self.db_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for device_data in data.get("devices", []):
-                # Ignore unknown keys so a file written by a newer version still loads
-                device = DeviceConfig(**{k: v for k, v in device_data.items() if k in known_fields})
+                device = DeviceConfig.from_dict(device_data)
                 self._devices[device.device_id] = device
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
             self.load_error = f"{self.db_path}: {e}"
@@ -161,8 +180,8 @@ class DeviceDatabase:
     def _save(self):
         """Save devices to the database file."""
         data = {
-            "version": 1,
-            "devices": [asdict(d) for d in self._devices.values()]
+            "version": 2,
+            "devices": [d.to_dict() for d in self._devices.values()]
         }
         with open(self.db_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -197,6 +216,42 @@ class DeviceDatabase:
             )
         self._devices[device.device_id] = device
         self._save()
+
+    def add_run(self, device_id: str, run: QCRun) -> bool:
+        """Record a QC run for a device; a run with the same id (same series) is replaced.
+
+        Returns True when an existing run was replaced.
+        """
+        device = self._devices[device_id]
+        replaced = False
+        for i, existing in enumerate(device.runs):
+            if existing.run_id == run.run_id:
+                device.runs[i] = run
+                replaced = True
+                break
+        else:
+            device.runs.append(run)
+        device.runs.sort(key=lambda r: (r.run_date, r.recorded_at))
+        self._save()
+        return replaced
+
+    def update_run(self, device_id: str, run: QCRun):
+        """Persist changes made to a run object that already belongs to the device."""
+        device = self._devices[device_id]
+        if not any(r is run for r in device.runs):
+            raise ValueError("run does not belong to this device")
+        self._save()
+
+    def delete_run(self, device_id: str, run_id: str) -> bool:
+        device = self._devices.get(device_id)
+        if device is None:
+            return False
+        before = len(device.runs)
+        device.runs = [r for r in device.runs if r.run_id != run_id]
+        if len(device.runs) != before:
+            self._save()
+            return True
+        return False
 
     def delete_device(self, device_id: str) -> bool:
         """Delete a device from the database."""

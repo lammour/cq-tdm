@@ -16,6 +16,8 @@ import numpy as np
 from cq_tdm import __version__
 
 from ..core import DicomImage, WaterPhantomResults, NPSResult, format_fr
+from ..core.qc_history import NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, evaluate_run
+from ..core.trend_chart import LIGHT_PALETTE, render_trend_chart
 
 # Reportlab imports are deferred to _ensure_reportlab() for faster startup
 colors = None
@@ -388,8 +390,10 @@ class PDFReportGenerator:
         logo_path: Optional[str] = None,
         logo_scale: float = 1.0,
         notes: str = "",
+        history: Optional[list[QCRun]] = None,
     ):
         _ensure_reportlab()
+        self.history = list(history or [])
         self.hospital_name = hospital_name
         self.hospital_location = hospital_location
         self.device_name = device_name
@@ -608,6 +612,10 @@ class PDFReportGenerator:
 
         # Artifact inspection results
         story.append(KeepTogether(self._build_artifact_section(image, artifact_result)))
+
+        # History of previous controls and trends (if any)
+        if self.history:
+            story.append(KeepTogether(self._build_history_section()))
 
         # Notes section (if any)
         if self.notes and self.notes.strip():
@@ -859,6 +867,89 @@ class PDFReportGenerator:
             if artifact_result.artifacts_present:
                 elements.append(Paragraph(f"<i>→ {_action_text(False, False)}</i>", self.styles[status_style]))
 
+        elements.append(Spacer(1, 8))
+        return elements
+
+    def _build_history_section(self) -> list:
+        """Table of previous controls and trend charts for the stability tests."""
+        elements = []
+        elements.append(Paragraph("Historique des contrôles", self.styles['SectionTitle']))
+
+        runs = sorted(self.history, key=lambda r: (r.run_date, r.recorded_at), reverse=True)
+        shown = runs[:10]
+        elements.append(Paragraph(
+            f"{len(runs)} contrôle{'s' if len(runs) > 1 else ''} enregistré{'s' if len(runs) > 1 else ''} "
+            f"pour cette installation" + (f" ({len(shown)} plus récents affichés)" if len(runs) > len(shown) else "")
+            + ". Les statuts sont ceux établis avec les valeurs de référence en vigueur à la date de chaque contrôle.",
+            self.styles['InfoText']))
+        elements.append(Spacer(1, 4))
+
+        header = ["Date", "kV / mAs", "CT eau", "Uniformité", "Bruit σ", "f SPB", "Artéfacts", "Statut"]
+        data = [header]
+        cell_status = []  # (row, col, status) for colouring
+        for i, run in enumerate(shown, start=1):
+            st = evaluate_run(run)
+            data.append([
+                run.date_fr(),
+                f"{format_fr(run.kvp, 0)} / {format_fr(run.mas, 0)}" if run.kvp else "—",
+                f"{format_fr(run.water_ct, 1, sign=True)} HU",
+                f"{format_fr(run.uniformity, 1)} HU",
+                f"{format_fr(run.noise, 2)} HU",
+                "—" if run.nps_freq is None else f"{format_fr(run.nps_freq, 3)}",
+                {None: "—", False: "Absents", True: "Présents"}[run.artifacts_present],
+                STATUS_SHORT[st["overall"]],
+            ])
+            for col, key in ((2, "water_ct"), (3, "uniformity"), (4, "noise"), (5, "nps_freq"),
+                             (6, "artifacts"), (7, "overall")):
+                cell_status.append((i, col, st[key]))
+
+        table = Table(data, colWidths=[2.0 * cm, 1.9 * cm, 1.9 * cm, 2.0 * cm, 1.9 * cm, 1.6 * cm, 1.9 * cm, 1.8 * cm],
+                      repeatRows=1)
+        style = [
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.9, 0.9, 0.9)),
+            ('LINEBELOW', (0, 0), (-1, 0), 0.75, colors.grey),
+            ('LINEBELOW', (0, 1), (-1, -1), 0.25, colors.lightgrey),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]
+        for row, col, status in cell_status:
+            if status == OK and col == 7:
+                style.append(('TEXTCOLOR', (col, row), (col, row), _status_color(True, False)))
+            elif status in (NC, NCG):
+                style.append(('TEXTCOLOR', (col, row), (col, row), _status_color(False, status == NCG)))
+                if col == 7:
+                    style.append(('FONTNAME', (col, row), (col, row), 'Helvetica-Bold'))
+            elif status == PENDING:
+                style.append(('TEXTCOLOR', (col, row), (col, row), colors.grey))
+        table.setStyle(TableStyle(style))
+        elements.append(table)
+        elements.append(Spacer(1, 8))
+
+        # Trend charts for the two stability tests, side by side
+        charts = []
+        for metric, title in (("noise", "Bruit σ (HU)"), ("nps_freq", "Fréquence moyenne SPB")):
+            if not any(getattr(r, metric) is not None for r in runs):
+                continue
+            chart = render_trend_chart(
+                runs, metric, self.reference_noise, self.reference_nps_freq,
+                palette=LIGHT_PALETTE, width_px=640, height_px=400, dpi=150, title=title)
+            charts.append(Image(BytesIO(chart.png), width=8.3 * cm, height=5.19 * cm))
+        if charts:
+            charts_table = Table([charts], colWidths=[8.5 * cm] * len(charts))
+            charts_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            elements.append(charts_table)
+            elements.append(Paragraph(
+                "Zone verte : tolérance ANSM autour de la valeur de référence actuelle ; "
+                "points orange : hors tolérance.", self.styles['InfoText']))
         elements.append(Spacer(1, 8))
         return elements
 
@@ -1311,6 +1402,7 @@ def generate_pdf_report(
     logo_path: Optional[str] = None,
     logo_scale: float = 1.0,
     notes: str = "",
+    history: Optional[list[QCRun]] = None,
 ):
     """
     Convenience function to generate a PDF report.
@@ -1333,6 +1425,7 @@ def generate_pdf_report(
         logo_path: Path to logo image (PNG or JPG) to display at the top of the report.
         logo_scale: Logo scale factor (1.0 = 100%).
         notes: User notes in simplified markdown format.
+        history: Previously recorded QC runs of the device (table + trend charts).
     """
     generator = PDFReportGenerator(
         hospital_name=hospital_name,
@@ -1346,5 +1439,6 @@ def generate_pdf_report(
         logo_path=logo_path,
         logo_scale=logo_scale,
         notes=notes,
+        history=history,
     )
     generator.generate_report(output_path, image, water_results, nps_results, artifact_result, nps_image)

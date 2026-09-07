@@ -27,12 +27,15 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QSpinBox,
+    QTabWidget,
 )
 
 # Lightweight imports - no heavy dependencies
 from ..core.app_config import get_app_config, save_app_config
 from ..core.device_database import DeviceConfig, DeviceDatabase
 from ..core.utils import format_fr, parse_float_fr
+from ..core.qc_history import QCRun, dicom_date_to_iso
+from .history_panel import HistoryPanel
 
 # Heavy imports - deferred via lazy __init__.py (pydicom, numpy, scipy)
 from ..core import (
@@ -947,6 +950,21 @@ class MainWindow(QMainWindow):
         self.image_viewer.hu_slice_changed.connect(self._on_hu_slice_changed)
         self.image_viewer.nps_range_changed.connect(self._on_nps_range_changed)
         self.image_viewer.open_folder_requested.connect(self._open_dicom_folder)
+
+        # Slice selection (HU slice, SPB range) sits right under the slider whose
+        # markers it drives, with the reset-to-saved button at the far right
+        slice_row = QWidget()
+        slice_row_layout = QHBoxLayout(slice_row)
+        slice_row_layout.setContentsMargins(5, 0, 5, 2)
+        slice_row_layout.addWidget(self.image_viewer.slice_controls_widget)
+        slice_row_layout.addStretch(1)
+        self._btn_reset_slices = QPushButton("⟲ Réinit. coupes")
+        self._btn_reset_slices.setToolTip("Revenir aux coupes enregistrées pour cette installation")
+        self._btn_reset_slices.setEnabled(False)
+        self._btn_reset_slices.clicked.connect(self._reset_slices_to_saved)
+        slice_row_layout.addWidget(self._btn_reset_slices)
+        self.image_viewer.layout().insertWidget(1, slice_row)  # index 0 is the slider bar
+
         left_layout.addWidget(self.image_viewer, 1)
 
         # Right panel - Results and controls
@@ -967,24 +985,18 @@ class MainWindow(QMainWindow):
         self._device_combo.currentIndexChanged.connect(self._on_device_selected)
         device_selector_layout.addWidget(self._device_combo, 1)
 
-        self._btn_save_device = QPushButton("Enregistrer")
-        self._btn_save_device.setMaximumWidth(100)
-        self._btn_save_device.clicked.connect(self._save_current_device)
-        device_selector_layout.addWidget(self._btn_save_device)
-
-        self._btn_restore_device = QPushButton("Restaurer")
-        self._btn_restore_device.setMaximumWidth(80)
-        self._btn_restore_device.setToolTip("Restaurer les valeurs enregistrées")
-        self._btn_restore_device.clicked.connect(self._restore_saved_values)
-        self._btn_restore_device.setEnabled(False)  # Disabled until values are modified
-        device_selector_layout.addWidget(self._btn_restore_device)
-
-        self._btn_delete_device = QPushButton("Supprimer")
-        self._btn_delete_device.setMaximumWidth(80)
-        self._btn_delete_device.clicked.connect(self._delete_current_device)
-        device_selector_layout.addWidget(self._btn_delete_device)
+        # The installation form lives in a dialog, opened from here
+        self._btn_edit_device = QPushButton("Modifier…")
+        self._btn_edit_device.setToolTip("Renseigner l'installation et ses valeurs de référence")
+        self._btn_edit_device.clicked.connect(self._edit_installation)
+        device_selector_layout.addWidget(self._btn_edit_device)
 
         right_layout.addLayout(device_selector_layout)
+
+        self._install_summary = QLabel()
+        self._install_summary.setWordWrap(True)
+        self._install_summary.setStyleSheet("color: #888; font-size: 11px; margin-left: 2px;")
+        right_layout.addWidget(self._install_summary)
 
         device_form = QWidget()
         device_form_layout = QGridLayout(device_form)
@@ -1053,18 +1065,54 @@ class MainWindow(QMainWindow):
         device_form_layout.addWidget(QLabel("Fréq. SPB réf. :"), 8, 0)
         device_form_layout.addWidget(self._edit_ref_nps_freq, 8, 1)
 
-        right_layout.addWidget(device_form)
-        right_layout.addSpacing(15)
+        # Slice selection (read-only here: it is chosen in the main window, saved with the device)
+        slices_label = QLabel("Coupes analysées :")
+        slices_label.setStyleSheet("font-style: italic; color: #888; margin-top: 4px;")
+        device_form_layout.addWidget(slices_label, 9, 0, 1, 2)
+        device_form_layout.addWidget(QLabel("Coupe UH :"), 10, 0)
+        self._label_dialog_hu_slice = QLabel("—")
+        device_form_layout.addWidget(self._label_dialog_hu_slice, 10, 1)
+        device_form_layout.addWidget(QLabel("Coupes SPB :"), 11, 0)
+        self._label_dialog_nps_range = QLabel("—")
+        device_form_layout.addWidget(self._label_dialog_nps_range, 11, 1)
+        self._label_dialog_slices_note = QLabel()
+        self._label_dialog_slices_note.setWordWrap(True)
+        self._label_dialog_slices_note.setStyleSheet("font-size: 11px;")
+        device_form_layout.addWidget(self._label_dialog_slices_note, 12, 0, 1, 2)
+
+        # Installation dialog (persistent: the QLineEdits above must outlive each opening
+        # because the results view, PDF export and auto-detection read them directly)
+        self._install_dialog = QDialog(self)
+        self._install_dialog.setWindowTitle("Installation")
+        self._install_dialog.setMinimumWidth(520)
+        dialog_layout = QVBoxLayout(self._install_dialog)
+        dialog_layout.addWidget(device_form)
+
+        dialog_buttons = QHBoxLayout()
+        self._btn_save_device = QPushButton("Enregistrer")
+        self._btn_save_device.clicked.connect(self._save_current_device)
+        dialog_buttons.addWidget(self._btn_save_device)
+
+        self._btn_restore_device = QPushButton("Restaurer")
+        self._btn_restore_device.setToolTip("Restaurer les valeurs enregistrées")
+        self._btn_restore_device.clicked.connect(self._restore_saved_values)
+        self._btn_restore_device.setEnabled(False)  # Disabled until values are modified
+        dialog_buttons.addWidget(self._btn_restore_device)
+
+        self._btn_delete_device = QPushButton("Supprimer")
+        self._btn_delete_device.clicked.connect(self._delete_current_device)
+        dialog_buttons.addWidget(self._btn_delete_device)
+
+        dialog_buttons.addStretch(1)
+        btn_close = QPushButton("Fermer")
+        btn_close.clicked.connect(self._install_dialog.accept)
+        dialog_buttons.addWidget(btn_close)
+        dialog_layout.addLayout(dialog_buttons)
+
+        self._update_install_summary()
+        right_layout.addSpacing(10)
 
         # Slice selection controls (from image viewer)
-        slice_controls_label = QLabel("Sélection des coupes")
-        slice_controls_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        right_layout.addWidget(slice_controls_label)
-
-        right_layout.addWidget(self.image_viewer.slice_controls_widget)
-
-        right_layout.addSpacing(15)
-
         # Results section
         results_label = QLabel("Résultats d'analyse")
         results_label.setStyleSheet("font-weight: bold; font-size: 14px;")
@@ -1083,7 +1131,16 @@ class MainWindow(QMainWindow):
             }}
         """)
         self.results_browser.setHtml(self._get_empty_results_html())
-        right_layout.addWidget(self.results_browser, 1)
+
+        # Results and history side by side in tabs
+        self.history_panel = HistoryPanel()
+        self.history_panel.reference_requested.connect(self._apply_reference_from_history)
+        self.history_panel.delete_requested.connect(self._delete_history_run)
+        self.history_panel.pdf_relinked.connect(self._relink_history_pdf)
+        self._results_tabs = QTabWidget()
+        self._results_tabs.addTab(self.results_browser, "Résultats")
+        self._results_tabs.addTab(self.history_panel, "Historique")
+        right_layout.addWidget(self._results_tabs, 1)
 
         # Artifact inspection button
         self.btn_artifact = QPushButton("Inspection visuelle des artéfacts")
@@ -1097,7 +1154,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.btn_notes)
 
         # Export button
-        self.btn_export = QPushButton("Exporter le rapport PDF")
+        self.btn_export = QPushButton("Enregistrer les résultats et exporter le PDF")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_pdf)
         right_layout.addWidget(self.btn_export)
@@ -1232,7 +1289,7 @@ class MainWindow(QMainWindow):
 <h3>Fichiers et fenêtres</h3>
 <table>
 <tr><td width="120"><b>Ctrl+O</b></td><td>Ouvrir un dossier DICOM</td></tr>
-<tr><td><b>Ctrl+E</b></td><td>Exporter le rapport PDF</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>Enregistrer les résultats et exporter le PDF</td></tr>
 <tr><td><b>Ctrl+I</b></td><td>Informations image DICOM</td></tr>
 <tr><td><b>F1</b></td><td>Aide</td></tr>
 <tr><td><b>Ctrl+Q</b></td><td>Quitter l'application</td></tr>
@@ -1273,7 +1330,7 @@ décision ANSM du 18/12/2025 (section 9.1.7).</p>
 </li>
 <li><b>Inspecter les artéfacts</b> (touche A) : vérifiez visuellement l'absence d'artéfacts
 cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
-<li><b>Exporter le rapport PDF</b> (Ctrl+E) : génère un rapport conforme incluant tous les résultats</li>
+<li><b>Enregistrer les résultats et exporter le PDF</b> (Ctrl+E) : enregistre le contrôle dans l'historique de l'installation et génère le rapport conforme</li>
 </ol>
 
 <h3>Marqueurs du curseur de coupes</h3>
@@ -1359,14 +1416,18 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         self._edit_ref_noise.setText(self._saved_ref_noise)
         self._edit_ref_nps_freq.setText(self._saved_ref_nps_freq)
 
-        # Restore slice values
+        self._reset_slices_to_saved()
+
+        # Update button states
+        self._update_save_button_style()
+
+    def _reset_slices_to_saved(self):
+        """Put the HU slice and SPB range back to the values saved with the device."""
         if self._saved_hu_slice is not None:
             self.image_viewer.set_hu_slice_index(self._saved_hu_slice)
         if self._saved_nps_start is not None and self._saved_nps_end is not None:
             self.image_viewer.set_nps_slice_range(self._saved_nps_start, self._saved_nps_end)
-
-        # Update button states
-        self._update_save_button_style()
+        self._check_slice_values_modified()
 
     def _on_field_changed(self, text: str = ""):
         """Handle field value change - update instance variables and check modifications."""
@@ -1380,6 +1441,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
         # Check if any value has been modified
         self._update_save_button_style()
+        self._update_install_summary()
 
     def _update_save_button_style(self):
         """Update the save and restore button states based on whether values are modified."""
@@ -1445,6 +1507,11 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         """Check if slice values have been modified and update button states."""
         # Update save and restore button states
         self._update_save_button_style()
+        self._update_install_summary()
+        self._update_dialog_slice_labels()
+        if hasattr(self, "_btn_reset_slices"):
+            _, _, differs = self._slice_selection_state()
+            self._btn_reset_slices.setEnabled(differs)
 
     def _open_dicom_folder(self):
         """Open a folder containing DICOM files."""
@@ -1603,6 +1670,17 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             QMessageBox.warning(self, "Attention", "Aucune analyse effectuée.")
             return
 
+        if self._current_device is None:
+            answer = QMessageBox.question(
+                self, "Installation non enregistrée",
+                "L'installation n'est pas enregistrée : le rapport PDF sera exporté mais le contrôle "
+                "ne sera pas ajouté à l'historique.\n\nEnregistrez d'abord l'installation via « Modifier… » "
+                "pour conserver les résultats.\n\nExporter quand même ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
         # Default filename with device info and date
         default_name = generate_report_filename(
             device_name=self._device_name,
@@ -1667,8 +1745,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     logo_path=get_app_config().report_logo_path or None,
                     logo_scale=get_app_config().report_logo_scale,
                     notes=self._user_notes,
+                    history=list(self._current_device.runs) if self._current_device else [],
                 )
-                self.statusbar.showMessage(f"Rapport exporté: {file_path}")
+                history_msg = self._record_run_in_history(file_path)
+                self.statusbar.showMessage(f"Rapport exporté: {file_path}{history_msg}")
 
                 # Open PDF directly with default viewer
                 from PySide6.QtCore import QUrl
@@ -1987,6 +2067,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         if self._current_device is not None:
             self._current_device.reference_noise = ref_noise
             self._current_device.reference_nps_freq = ref_nps_freq
+        self.history_panel.set_references(ref_noise, ref_nps_freq)
 
         # Update results display to show comparison
         self._update_results_display()
@@ -2114,6 +2195,119 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         """Update the results browser with current results."""
         html = self._format_results_html()
         self.results_browser.setHtml(html)
+        self.history_panel.set_current_run(self._current_run_for_history())
+
+    # ---- results history ----
+
+    def _refresh_history(self, device: DeviceConfig | None):
+        """Fill the history tab for the selected device."""
+        if device is None:
+            self.history_panel.set_runs([], None, None)
+            return
+        self.history_panel.set_runs(list(device.runs), device.reference_noise, device.reference_nps_freq)
+
+    def _current_run_for_history(self) -> QCRun | None:
+        """Build a QCRun from the measurement on screen, or None if nothing is analysed yet."""
+        if self._current_results is None:
+            return None
+        from datetime import datetime
+        from cq_tdm import __version__
+
+        img = self._current_image
+        if self._current_series is not None:
+            hu_index = self.image_viewer.get_hu_slice_index()
+            if 0 <= hu_index < self._current_series.num_images:
+                img = self._current_series.images[hu_index]
+        nps_start, nps_end = self.image_viewer.get_nps_slice_range()
+        return QCRun(
+            run_date=dicom_date_to_iso(img.study_date if img is not None else ""),
+            series_uid=img.series_instance_uid if img is not None else "",
+            kvp=float(img.kvp) if img is not None and img.kvp else 0.0,
+            mas=float(img.tube_current) if img is not None and img.tube_current else 0.0,
+            slice_thickness=float(img.slice_thickness) if img is not None else 0.0,
+            kernel=img.convolution_kernel if img is not None else "",
+            water_ct=self._current_results.water_ct_number,
+            uniformity=self._current_results.uniformity,
+            noise=self._current_results.noise,
+            nps_freq=self._nps_results.mean_frequency if self._nps_results is not None else None,
+            artifacts_present=self._artifact_result,
+            artifacts_description=self._artifact_description if self._artifact_result else "",
+            hu_slice_index=self.image_viewer.get_hu_slice_index(),
+            nps_start_slice=nps_start if self._nps_results is not None else None,
+            nps_end_slice=nps_end if self._nps_results is not None else None,
+            notes=self._user_notes,
+            software_version=__version__,
+            recorded_at=datetime.now().isoformat(timespec="seconds"),
+        )
+
+    def _record_run_in_history(self, pdf_path: str) -> str:
+        """Store the measurement on screen as a QC run of the current device.
+
+        Returns a short status text for the status bar.
+        """
+        run = self._current_run_for_history()
+        if run is None or self._current_device is None:
+            return ""
+        run.pdf_path = pdf_path
+        ref_noise_text = self._edit_ref_noise.text().strip()
+        ref_nps_text = self._edit_ref_nps_freq.text().strip()
+        run.ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
+        run.ref_nps_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
+        try:
+            replaced = self._device_db.add_run(self._current_device.device_id, run)
+        except OSError as e:
+            QMessageBox.warning(
+                self, "Historique",
+                f"Le rapport a été exporté mais le contrôle n'a pas pu être enregistré dans l'historique :\n{e}")
+            return ""
+        self._refresh_history(self._current_device)
+        self.history_panel.select_run(self._current_device.find_run(run.run_id))
+        return " · contrôle remplacé dans l'historique" if replaced else " · contrôle ajouté à l'historique"
+
+    def _apply_reference_from_history(self, run: QCRun):
+        """Make a past run's noise and SPB frequency the device reference values."""
+        nps_text = f" et f SPB = {format_fr(run.nps_freq, 3)} c/mm" if run.nps_freq is not None else ""
+        answer = QMessageBox.question(
+            self, "Valeurs de référence",
+            f"Définir σ = {format_fr(run.noise, 2)} HU{nps_text} (contrôle du {run.date_fr()}) "
+            "comme valeurs de référence de cette installation ?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._edit_ref_noise.setText(format_fr(run.noise, 2))
+        if run.nps_freq is not None:
+            self._edit_ref_nps_freq.setText(format_fr(run.nps_freq, 3))
+        if self._current_device is not None:
+            self._current_device.reference_noise = run.noise
+            self._current_device.reference_nps_freq = run.nps_freq
+            try:
+                self._device_db.save_device(self._current_device)
+            except OSError as e:
+                QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer les valeurs de référence :\n{e}")
+                return
+            self._saved_ref_noise = self._edit_ref_noise.text()
+            self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
+            self._update_save_button_style()
+            self._update_install_summary()
+        self.statusbar.showMessage(f"Valeurs de référence définies depuis le contrôle du {run.date_fr()}", 5000)
+
+    def _delete_history_run(self, run: QCRun):
+        if self._current_device is None:
+            return
+        try:
+            self._device_db.delete_run(self._current_device.device_id, run.run_id)
+        except OSError as e:
+            QMessageBox.warning(self, "Historique", f"Impossible de supprimer le contrôle :\n{e}")
+            return
+        self._refresh_history(self._current_device)
+
+    def _relink_history_pdf(self, run: QCRun, new_path: str):
+        if self._current_device is None:
+            return
+        run.pdf_path = new_path
+        try:
+            self._device_db.update_run(self._current_device.device_id, run)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer le nouveau chemin :\n{e}")
 
     def _format_results_html(self) -> str:
         """Format all results as HTML."""
@@ -2477,8 +2671,109 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 self._current_device = device
                 self._load_device_config(device)
 
+    def _edit_installation(self):
+        """Open the installation form."""
+        self._update_dialog_slice_labels()
+        self._install_dialog.exec()
+        self._update_install_summary()
+
+    def _slice_selection_state(self) -> tuple[str, str | None, bool]:
+        """Return (current selection text, saved selection text or None, differs)."""
+        if self._current_series is None:
+            return "", None, False
+        hu = self.image_viewer.get_hu_slice_index()
+        start, end = self.image_viewer.get_nps_slice_range()
+        current = f"UH {hu + 1} · SPB {start + 1}–{end + 1}"
+        if self._current_device is None or self._saved_hu_slice is None \
+                or self._saved_nps_start is None or self._saved_nps_end is None:
+            return current, None, False
+        saved = f"UH {self._saved_hu_slice + 1} · SPB {self._saved_nps_start + 1}–{self._saved_nps_end + 1}"
+        return current, saved, current != saved
+
+    def _update_dialog_slice_labels(self):
+        """Show the current and saved slice selection inside the Installation dialog."""
+        if not hasattr(self, "_label_dialog_hu_slice"):
+            return
+        c = _theme_colors()
+        if self._current_series is None:
+            self._label_dialog_hu_slice.setText("—")
+            self._label_dialog_nps_range.setText("—")
+            if self._saved_hu_slice is not None:
+                self._label_dialog_hu_slice.setText(f"{self._saved_hu_slice + 1} (enregistrée)")
+            if self._saved_nps_start is not None and self._saved_nps_end is not None:
+                self._label_dialog_nps_range.setText(
+                    f"{self._saved_nps_start + 1} – {self._saved_nps_end + 1} (enregistrées)")
+            self._label_dialog_slices_note.setText("Aucune série chargée : les coupes enregistrées sont conservées.")
+            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
+            return
+
+        hu = self.image_viewer.get_hu_slice_index()
+        start, end = self.image_viewer.get_nps_slice_range()
+        hu_text = str(hu + 1)
+        nps_text = f"{start + 1} – {end + 1}"
+        _, saved, differs = self._slice_selection_state()
+        if differs:
+            if self._saved_hu_slice is not None and hu != self._saved_hu_slice:
+                hu_text += f"   (enregistrée : {self._saved_hu_slice + 1})"
+            if (self._saved_nps_start, self._saved_nps_end) != (start, end):
+                nps_text += f"   (enregistrées : {self._saved_nps_start + 1} – {self._saved_nps_end + 1})"
+            self._label_dialog_slices_note.setText(
+                "La sélection actuelle diffère des coupes enregistrées. "
+                "« Enregistrer » remplacera les coupes enregistrées par la sélection actuelle.")
+            self._label_dialog_slices_note.setStyleSheet(f"font-size: 11px; color: {c['warning_border']};")
+        elif saved is None:
+            self._label_dialog_slices_note.setText(
+                "Coupes non encore enregistrées pour cette installation : « Enregistrer » les mémorisera.")
+            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
+        else:
+            self._label_dialog_slices_note.setText("Sélection identique aux coupes enregistrées.")
+            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
+        self._label_dialog_hu_slice.setText(hu_text)
+        self._label_dialog_nps_range.setText(nps_text)
+
+    def _update_install_summary(self):
+        """Refresh the one-glance summary shown under the device selector."""
+        if not hasattr(self, "_install_summary"):
+            return
+        c = _theme_colors()
+        if self._current_device is None:
+            saved = "Installation non enregistrée"
+        else:
+            parts = [p for p in (self._edit_hospital_name.text().strip(),
+                                 self._edit_hospital_location.text().strip()) if p]
+            serial = self._edit_serial_number.text().strip()
+            if serial:
+                parts.append(f"n° série {serial}")
+            saved = " · ".join(parts) if parts else "Aucune information renseignée"
+
+        noise_text = self._edit_ref_noise.text().strip()
+        nps_text = self._edit_ref_nps_freq.text().strip()
+        ref_noise = parse_float_fr(noise_text) if noise_text else None
+        ref_nps = parse_float_fr(nps_text) if nps_text else None
+        refs = []
+        if ref_noise is not None:
+            refs.append(f"σ réf. {format_fr(ref_noise, 2)} HU")
+        if ref_nps is not None:
+            refs.append(f"f SPB réf. {format_fr(ref_nps, 3)} c/mm")
+        ref_line = " · ".join(refs) if refs else (
+            f'<span style="color:{c["warning_border"]};">Valeurs de référence non renseignées</span>'
+        )
+        modified = " · <i>modifications non enregistrées</i>" if self._check_any_value_modified() else ""
+        current, saved_slices, differs = self._slice_selection_state()
+        if differs:
+            slice_line = (f'<br><span style="color:{c["warning_border"]};">Coupes {current} ≠ enregistrées '
+                          f'({saved_slices}) — cliquer sur « Modifier… » pour les enregistrer</span>')
+        elif current and saved_slices is None and self._current_device is not None:
+            slice_line = f"<br>Coupes {current} · <i>non enregistrées</i>"
+        elif current:
+            slice_line = f"<br>Coupes {current}"
+        else:
+            slice_line = ""
+        self._install_summary.setText(f"{saved}<br>{ref_line}{modified}{slice_line}")
+
     def _load_device_config(self, device: DeviceConfig | None):
         """Load device configuration into the UI fields."""
+        self._refresh_history(device)
         if device is None:
             # Clear fields (placeholders will show in grey)
             self._edit_hospital_name.clear()
@@ -2644,6 +2939,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         self._update_results_display()
 
         self.statusbar.showMessage(f"Installation '{device.display_name()}' enregistrée")
+        self._update_install_summary()
+        self._update_dialog_slice_labels()
 
     def _delete_current_device(self):
         """Delete the currently selected device from the database."""
@@ -2659,7 +2956,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         reply = QMessageBox.question(
             self,
             "Confirmer la suppression",
-            f"Voulez-vous vraiment supprimer l'installation '{self._current_device.display_name()}' ?",
+            f"Voulez-vous vraiment supprimer l'installation '{self._current_device.display_name()}' ?"
+            + (f"\n\nSes {len(self._current_device.runs)} contrôles enregistrés seront perdus."
+               if self._current_device.runs else ""),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

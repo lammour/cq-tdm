@@ -24,6 +24,7 @@ class DicomImage:
 
     # Series info
     series_description: str = ""
+    series_instance_uid: str = ""
     series_number: int = 0
 
     # Image info
@@ -195,6 +196,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         study_date=str(_get_attr(ds, 'StudyDate', '')),
         study_description=str(_get_attr(ds, 'StudyDescription', '')),
         series_description=str(_get_attr(ds, 'SeriesDescription', '')),
+        series_instance_uid=str(_get_attr(ds, 'SeriesInstanceUID', '')),
         series_number=int(_get_attr(ds, 'SeriesNumber', 0)),
         instance_number=int(_get_attr(ds, 'InstanceNumber', 0)),
         slice_location=slice_location,
