@@ -146,6 +146,10 @@ class NPSResult:
     # Warnings about non-uniform ROIs
     roi_warnings: list[ROIUniformityWarning] = field(default_factory=list)
 
+    # 0-based indices of ROIs that were clipped by the image border on at least
+    # one slice and therefore did not contribute to the spectrum
+    skipped_rois: list[int] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for reporting."""
         return {
@@ -555,6 +559,7 @@ def analyze_nps(
     nps_sum = None
     total_roi_count = 0
     roi_stats: list[tuple[int, int, float, float]] = []  # (slice_idx, roi_idx, mean, std)
+    skipped_rois: set[int] = set()
 
     for slice_idx, img in enumerate(slices):
         for roi_idx, roi_pos in enumerate(roi_positions):
@@ -563,6 +568,7 @@ def analyze_nps(
 
             # Skip if ROI is not the expected size (near image edges)
             if roi.shape[0] != roi_size or roi.shape[1] != roi_size:
+                skipped_rois.add(roi_idx)
                 continue
 
             # Collect statistics before detrending for uniformity check
@@ -647,7 +653,7 @@ def analyze_nps(
     slice_end_mm = slices[-1].slice_location
     roi_config = NPSROIConfig(
         phantom_name=middle_slice.series_description or "",
-        measurement_date=middle_slice.study_date or "",
+        measurement_date=middle_slice.acquisition_date or middle_slice.study_date or "",
         dfov=middle_slice.reconstruction_diameter or (middle_slice.columns * pixel_size),
         pixel_size=pixel_size,
         width_in_pixel=middle_slice.columns,
@@ -672,6 +678,7 @@ def analyze_nps(
         pixel_size_mm=pixel_size,
         roi_config=roi_config,
         roi_warnings=roi_warnings,
+        skipped_rois=sorted(skipped_rois),
     )
 
 

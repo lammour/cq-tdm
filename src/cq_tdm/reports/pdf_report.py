@@ -16,7 +16,10 @@ import numpy as np
 from cq_tdm import __version__
 
 from ..core import DicomImage, WaterPhantomResults, NPSResult, format_fr
-from ..core.qc_history import NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, evaluate_run
+from ..core.qc_history import (
+    NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, dicom_date_to_iso, evaluate_run,
+    noise_bounds, noise_status, nps_status,
+)
 from ..core.trend_chart import LIGHT_PALETTE, render_trend_chart
 
 # Reportlab imports are deferred to _ensure_reportlab() for faster startup
@@ -509,8 +512,11 @@ class PDFReportGenerator:
         """
         output_path = Path(output_path)
 
-        # Store control datetime for header
-        control_datetime = datetime.now().strftime('%d/%m/%Y %H:%M')
+        # The control date is the day the phantom was scanned (DICOM study date),
+        # which is also the date recorded in the history; the export time is
+        # shown separately so both are traceable.
+        control_date = datetime.fromisoformat(dicom_date_to_iso(image.acquisition_date or image.study_date)).strftime('%d/%m/%Y')
+        export_datetime = datetime.now().strftime('%d/%m/%Y %H:%M')
 
         doc = SimpleDocTemplate(
             str(output_path),
@@ -539,6 +545,12 @@ class PDFReportGenerator:
                 # Apply scale to text width, height follows aspect ratio
                 final_width = text_width * self.logo_scale
                 final_height = final_width / aspect
+                # A tall (portrait) logo must still fit on the first page with
+                # the title and summary; cap its height and shrink the width.
+                max_height = 6 * cm
+                if final_height > max_height:
+                    final_height = max_height
+                    final_width = final_height * aspect
 
                 logo_img = Image(self.logo_path, width=final_width, height=final_height)
                 logo_img.hAlign = 'CENTER'
@@ -561,7 +573,11 @@ class PDFReportGenerator:
             self.styles['ReportSubtitle']
         ))
         story.append(Paragraph(
-            f"Contrôle de qualité interne trimestriel du {control_datetime}",
+            f"Contrôle de qualité interne trimestriel du {control_date}",
+            self.styles['ReportSubtitle']
+        ))
+        story.append(Paragraph(
+            f"Rapport édité le {export_datetime}",
             self.styles['ReportSubtitle']
         ))
         story.append(Spacer(1, 12))
@@ -639,7 +655,7 @@ class PDFReportGenerator:
         def on_later_pages(canvas_obj, doc):
             """Subsequent pages: header and footer."""
             page_counter[0] += 1
-            _draw_header(canvas_obj, doc, self.hospital_name, self.device_name, self.inventory_number, control_datetime)
+            _draw_header(canvas_obj, doc, self.hospital_name, self.device_name, self.inventory_number, control_date)
             _draw_footer(canvas_obj, doc, page_counter[0])
 
         doc.build(story, onFirstPage=on_first_page, onLaterPages=on_later_pages)
@@ -660,22 +676,16 @@ class PDFReportGenerator:
                 if water_results.water_ct_ncg:
                     any_ncg = True
             if not water_results.uniformity_acceptable:
-                all_acceptable = False
-                if water_results.uniformity_ncg:
-                    any_ncg = True
+                all_acceptable = False  # no NCG tier for uniformity
 
-            # Noise stability check if reference available
+            # Noise stability check if reference available (same rule as the history)
             if self.reference_noise is not None:
-                deviation = water_results.noise - self.reference_noise
-                lower_bound = min(-0.2, -0.1 * self.reference_noise)
-                upper_bound = max(0.2, 0.1 * self.reference_noise)
-                if not (lower_bound <= deviation <= upper_bound):
+                if noise_status(water_results.noise, self.reference_noise) != OK:
                     all_acceptable = False
 
         # NPS stability check if reference available
         if nps_results and self.reference_nps_freq is not None and self.reference_nps_freq > 0:
-            deviation_pct = ((nps_results.mean_frequency - self.reference_nps_freq) / self.reference_nps_freq) * 100
-            if not (-10.0 <= deviation_pct <= 10.0):
+            if nps_status(nps_results.mean_frequency, self.reference_nps_freq) != OK:
                 all_acceptable = False
 
         if artifact_result is not None and artifact_result.artifacts_present:
@@ -729,7 +739,7 @@ class PDFReportGenerator:
         elements.append(Paragraph("Paramètres d'acquisition", self.styles['SectionTitle']))
 
         # Format date
-        date_str = image.study_date
+        date_str = image.acquisition_date or image.study_date
         if len(date_str) == 8:
             date_str = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[:4]}"
 
@@ -1071,8 +1081,8 @@ class PDFReportGenerator:
 
         elements.append(Paragraph("Uniformité", self.styles['SectionTitle']))
 
-        status_text = _status_text(results.uniformity_acceptable, results.uniformity_ncg)
-        status_style = self._get_status_style(results.uniformity_acceptable, results.uniformity_ncg)
+        status_text = _status_text(results.uniformity_acceptable, False)
+        status_style = self._get_status_style(results.uniformity_acceptable, False)
 
         # Individual peripheral deviations table
         central_mean = results.central.mean_hu
@@ -1103,8 +1113,7 @@ class PDFReportGenerator:
 
         summary_data = [
             ["Écart max centre-périphérie :", f"{format_fr(results.uniformity, 1)} HU"],
-            ["Critère NC :", "≤ 7 HU"],
-            ["Critère NCG :", "> 25 HU"],
+            ["Critère :", "≤ 7 HU"],
         ]
         summary_table = Table(summary_data, colWidths=[5 * cm, 8.5 * cm])
         summary_table.setStyle(TableStyle([
@@ -1117,7 +1126,7 @@ class PDFReportGenerator:
         elements.append(summary_table)
         elements.append(Spacer(1, 4))
         elements.append(Paragraph(f"Résultat : {status_text}", self.styles[status_style]))
-        action = _action_text(results.uniformity_acceptable, results.uniformity_ncg)
+        action = _action_text(results.uniformity_acceptable, False)
         if action:
             elements.append(Paragraph(f"<i>→ {action}</i>", self.styles[status_style]))
         elements.append(Spacer(1, 8))
@@ -1131,7 +1140,7 @@ class PDFReportGenerator:
         elements.append(Paragraph("Bruit", self.styles['SectionTitle']))
 
         data = [
-            ["Écart-type central :", f"{format_fr(results.noise, 1)} HU"],
+            ["Écart-type central :", f"{format_fr(results.noise, 2)} HU"],
         ]
 
         # Add stability comparison if reference value is available
@@ -1139,11 +1148,10 @@ class PDFReportGenerator:
         if self.reference_noise is not None:
             deviation = results.noise - self.reference_noise
             # ANSM criterion: MIN(-0.2, -0.1*B_ref) ≤ (B_i - B_ref) ≤ MAX(0.2, 0.1*B_ref)
-            lower_bound = min(-0.2, -0.1 * self.reference_noise)
-            upper_bound = max(0.2, 0.1 * self.reference_noise)
-            is_conforme = lower_bound <= deviation <= upper_bound
+            lower_bound, upper_bound = noise_bounds(self.reference_noise)
+            is_conforme = noise_status(results.noise, self.reference_noise) == OK
 
-            data.append(["Valeur de référence :", f"{format_fr(self.reference_noise, 1)} HU"])
+            data.append(["Valeur de référence :", f"{format_fr(self.reference_noise, 2)} HU"])
             data.append(["Écart :", f"{format_fr(deviation, 2, sign=True)} HU"])
             data.append(["Critère :", f"[{format_fr(lower_bound, 2, sign=True)}, {format_fr(upper_bound, 2, sign=True)}] HU"])
 
@@ -1185,7 +1193,7 @@ class PDFReportGenerator:
         is_conforme = None
         if self.reference_nps_freq is not None and self.reference_nps_freq > 0:
             deviation_pct = ((results.mean_frequency - self.reference_nps_freq) / self.reference_nps_freq) * 100
-            is_conforme = -10.0 <= deviation_pct <= 10.0
+            is_conforme = nps_status(results.mean_frequency, self.reference_nps_freq) == OK
 
             data.append(["Fréquence de référence :", f"{format_fr(self.reference_nps_freq, 3)} cycles/mm"])
             data.append(["Écart :", f"{format_fr(deviation_pct, 1, sign=True)} %"])
@@ -1284,30 +1292,26 @@ class PDFReportGenerator:
             summary_lines.append(("Nombre CT de l'eau", f"{format_fr(water_results.water_ct_number, 1, sign=True)} HU", ct_status, ct_style))
 
             # Uniformity
-            unif_status = _status_text(water_results.uniformity_acceptable, water_results.uniformity_ncg)
-            unif_style = self._get_status_style(water_results.uniformity_acceptable, water_results.uniformity_ncg)
+            unif_status = _status_text(water_results.uniformity_acceptable, False)
+            unif_style = self._get_status_style(water_results.uniformity_acceptable, False)
             summary_lines.append(("Uniformité", f"{format_fr(water_results.uniformity, 1)} HU", unif_status, unif_style))
 
             # Noise - with conformity check if reference value available
             if self.reference_noise is not None:
-                deviation = water_results.noise - self.reference_noise
-                lower_bound = min(-0.2, -0.1 * self.reference_noise)
-                upper_bound = max(0.2, 0.1 * self.reference_noise)
-                noise_conforme = lower_bound <= deviation <= upper_bound
-                noise_status = "CONFORME" if noise_conforme else "NON CONFORME"
+                noise_conforme = noise_status(water_results.noise, self.reference_noise) == OK
+                noise_text = "CONFORME" if noise_conforme else "NON CONFORME"
                 noise_style = 'ResultOK' if noise_conforme else 'ResultNC'
-                summary_lines.append(("Bruit (stabilité)", f"{format_fr(water_results.noise, 1)} HU", noise_status, noise_style))
+                summary_lines.append(("Bruit (stabilité)", f"{format_fr(water_results.noise, 2)} HU", noise_text, noise_style))
             else:
-                summary_lines.append(("Bruit", f"{format_fr(water_results.noise, 1)} HU", "—", 'InfoText'))
+                summary_lines.append(("Bruit", f"{format_fr(water_results.noise, 2)} HU", "—", 'InfoText'))
 
         if nps_results:
             # NPS - with conformity check if reference value available
             if self.reference_nps_freq is not None and self.reference_nps_freq > 0:
-                deviation_pct = ((nps_results.mean_frequency - self.reference_nps_freq) / self.reference_nps_freq) * 100
-                nps_conforme = -10.0 <= deviation_pct <= 10.0
-                nps_status = "CONFORME" if nps_conforme else "NON CONFORME"
+                nps_conforme = nps_status(nps_results.mean_frequency, self.reference_nps_freq) == OK
+                nps_text = "CONFORME" if nps_conforme else "NON CONFORME"
                 nps_style = 'ResultOK' if nps_conforme else 'ResultNC'
-                summary_lines.append(("SPB (stabilité)", f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm", nps_status, nps_style))
+                summary_lines.append(("SPB (stabilité)", f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm", nps_text, nps_style))
             else:
                 summary_lines.append(("SPB - Fréquence moyenne", f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm", "—", 'InfoText'))
 
@@ -1368,6 +1372,12 @@ def generate_report_filename(
 
     if date is None:
         date = datetime.now()
+    elif isinstance(date, str):
+        # ISO date (QCRun.run_date) or DICOM study date (YYYYMMDD); today if unusable
+        try:
+            date = datetime.fromisoformat(date.strip())
+        except ValueError:
+            date = datetime.fromisoformat(dicom_date_to_iso(date))
 
     # Sanitize device name and inventory number for filename
     def sanitize(s: str) -> str:

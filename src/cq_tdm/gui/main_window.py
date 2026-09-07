@@ -34,7 +34,10 @@ from PySide6.QtWidgets import (
 from ..core.app_config import get_app_config, save_app_config
 from ..core.device_database import DeviceConfig, DeviceDatabase
 from ..core.utils import format_fr, parse_float_fr
-from ..core.qc_history import QCRun, dicom_date_to_iso
+from ..core.qc_history import OK, QCRun, dicom_date_to_iso, noise_bounds, noise_status, nps_status
+from ..core.dicom_locator import (
+    find_series_folder, folder_matches, relative_to_database, relocation_between, resolve_dicom_folder,
+)
 from .history_panel import HistoryPanel
 
 # Heavy imports - deferred via lazy __init__.py (pydicom, numpy, scipy)
@@ -428,7 +431,7 @@ class DeviceManagerDialog(QDialog):
         if file_path:
             # Create empty database file
             Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(file_path).write_text('{"version": 1, "devices": []}', encoding="utf-8")
+            Path(file_path).write_text('{"version": 2, "devices": []}', encoding="utf-8")
             self._switch_database(file_path)
 
     def _move_database(self):
@@ -830,6 +833,7 @@ class MainWindow(QMainWindow):
         self._artifact_result: bool | None = None  # True=present (NC), False=absent (Conforme)
         self._artifact_description: str = ""  # Description of artifacts if present
         self._user_notes: str = ""  # User notes for the PDF report
+        self._current_folder: str = ""  # Folder the current series was loaded from
         self._debug_mode: bool = False  # Debug mode for phantom detection visualization
 
         # Device database and current device (use custom path from config if set)
@@ -1137,6 +1141,7 @@ class MainWindow(QMainWindow):
         self.history_panel.reference_requested.connect(self._apply_reference_from_history)
         self.history_panel.delete_requested.connect(self._delete_history_run)
         self.history_panel.pdf_relinked.connect(self._relink_history_pdf)
+        self.history_panel.load_series_requested.connect(self._load_run_series)
         self._results_tabs = QTabWidget()
         self._results_tabs.addTab(self.results_browser, "Résultats")
         self._results_tabs.addTab(self.history_panel, "Historique")
@@ -1262,7 +1267,6 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
-        from PySide6.QtWidgets import QMessageBox
         shortcuts = """
 <h3>Navigation des coupes</h3>
 <table>
@@ -1310,7 +1314,6 @@ class MainWindow(QMainWindow):
 
     def _show_help(self):
         """Show help dialog."""
-        from PySide6.QtWidgets import QMessageBox
         help_text = """
 <h2>CQ TDM - Aide</h2>
 
@@ -1545,7 +1548,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
             if series.is_empty:
                 self.statusbar.showMessage("Aucun fichier DICOM trouvé")
-                from PySide6.QtWidgets import QMessageBox
                 message = "Aucun fichier DICOM trouvé dans ce dossier."
                 if series.load_errors:
                     message += (
@@ -1556,12 +1558,18 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 return
 
             self._current_series = series
+            self._current_folder = str(Path(folder_path).resolve())
             # Reset all results so a failed analysis on the new series cannot leave
             # the previous series' numbers in the panel or in the PDF
             self._current_results = None
             self._nps_results = None
             self._artifact_result = None  # Reset artifact result for new series
             self._artifact_description = ""
+            # Notes belong to one control: do not carry them over to the next series
+            self._user_notes = ""
+            self.btn_notes.setText("Ajouter une observation")
+            # Drop the overlays of the previous series until the new analysis draws its own
+            self.image_viewer.viewer.clear_rois()
             self.btn_export.setEnabled(False)
             self._update_results_display()
 
@@ -1578,6 +1586,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
             # Display middle image and fit to view
             self.image_viewer.set_image(self._current_image, fit_to_view=True)
+            self._update_debug_overlay()
 
             # Try to auto-detect device from database
             self._try_auto_detect_device()
@@ -1593,7 +1602,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
         except Exception as e:
             self.statusbar.showMessage(f"Erreur: {e}")
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Erreur", f"Impossible de charger le dossier DICOM:\n{e}")
 
     def _on_slice_changed(self, index: int):
@@ -1661,12 +1669,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
     def _export_pdf(self):
         """Export analysis results to PDF."""
         if self._current_image is None:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Attention", "Aucune image chargée.")
             return
 
         if self._current_results is None and self._nps_results is None:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Attention", "Aucune analyse effectuée.")
             return
 
@@ -1681,10 +1687,11 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
-        # Default filename with device info and date
+        # Default filename with device info and the scan date (same date as the history)
         default_name = generate_report_filename(
             device_name=self._device_name,
             inventory_number=self._inventory_number,
+            date=self._current_image.acquisition_date or self._current_image.study_date,
         )
 
         file_path, _ = QFileDialog.getSaveFileName(
@@ -1715,7 +1722,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 nps_middle_image = None
                 if self._nps_results is not None and self._current_series is not None:
                     nps_start, nps_end = self.image_viewer.get_nps_slice_range()
-                    nps_middle_index = (nps_start + nps_end) // 2
+                    # Same slice as analyze_nps uses for centre detection: slices[len // 2]
+                    nps_middle_index = nps_start + (nps_end - nps_start + 1) // 2
                     if 0 <= nps_middle_index < self._current_series.num_images:
                         nps_middle_image = self._current_series.images[nps_middle_index]
 
@@ -1726,6 +1734,15 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     hu_index = self.image_viewer.get_hu_slice_index()
                     if 0 <= hu_index < self._current_series.num_images:
                         report_image = self._current_series.images[hu_index]
+
+                # Previous controls only: an earlier export of this same series is
+                # replaced by this one in the history, so it must not appear as a
+                # separate past control in the report
+                history = []
+                if self._current_device is not None:
+                    current_uid = report_image.series_instance_uid
+                    history = [r for r in self._current_device.runs
+                               if not (current_uid and r.run_id == current_uid)]
 
                 generate_pdf_report(
                     file_path,
@@ -1745,7 +1762,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     logo_path=get_app_config().report_logo_path or None,
                     logo_scale=get_app_config().report_logo_scale,
                     notes=self._user_notes,
-                    history=list(self._current_device.runs) if self._current_device else [],
+                    history=history,
                 )
                 history_msg = self._record_run_in_history(file_path)
                 self.statusbar.showMessage(f"Rapport exporté: {file_path}{history_msg}")
@@ -1756,7 +1773,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
             except Exception as e:
                 self.statusbar.showMessage(f"Erreur d'export: {e}")
-                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'export:\n{e}")
 
     def _export_nps_rois_json(self):
@@ -1764,7 +1780,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         import json
 
         if self._nps_results is None:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Attention", "Aucune analyse SPB effectuée.")
             return
 
@@ -1786,7 +1801,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 self.statusbar.showMessage(f"ROIs SPB exportées: {file_path}")
             except Exception as e:
                 self.statusbar.showMessage(f"Erreur d'export: {e}")
-                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'export:\n{e}")
 
     def _export_hu_rois_json(self):
@@ -1794,7 +1808,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         import json
 
         if self._current_results is None:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Attention", "Aucune analyse UH effectuée.")
             return
 
@@ -1869,7 +1882,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 self.statusbar.showMessage(f"ROIs UH exportées: {file_path}")
             except Exception as e:
                 self.statusbar.showMessage(f"Erreur d'export: {e}")
-                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'export:\n{e}")
 
     def _display_rois(self, rois, slice_index: int):
@@ -1907,26 +1919,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         self.image_viewer.viewer.set_water_rois(roi_list, slice_index=slice_index)
         self.image_viewer.set_water_roi_marker(slice_index)
 
-    def _run_nps_analysis(self):
-        """Run NPS analysis using spinbox slice range."""
-        if self._current_series is None:
-            return
-
-        try:
-            # Get slice range from spinboxes
-            nps_start, nps_end = self.image_viewer.get_nps_slice_range()
-
-            nps_result = analyze_nps(self._current_series, slice_range=(nps_start, nps_end))
-            self._nps_results = nps_result
-
-            # Display NPS ROI (square)
-            self._display_nps_roi(nps_result, nps_start, nps_end)
-            self.btn_export.setEnabled(True)
-
-        except Exception as e:
-            self.statusbar.showMessage(f"Erreur SPB: {e}")
-            self._nps_results = None
-
     def _display_nps_roi(self, nps_result: NPSResult, start_slice: int, end_slice: int):
         """Display all 8 NPS ROIs on the image viewer."""
         from PySide6.QtGui import QColor
@@ -1938,22 +1930,26 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         roi_positions = nps_result.roi_config.rois
         half_size = nps_result.roi_size // 2
 
-        # Create ROI objects for display
+        # Create ROI objects for display; ROIs clipped by the image border were
+        # not measured and are drawn in red so the overlay matches the analysis
         roi_list = []
-        roi_colors = [
-            QColor(0, 255, 0),    # Green for all ROIs
-        ]
+        skipped = set(nps_result.skipped_rois)
 
         for i, roi_pos in enumerate(roi_positions):
+            measured = i not in skipped
             roi = ROI(
                 center_x=roi_pos.x,
                 center_y=roi_pos.y,
                 radius=half_size,
-                name=f"SPB{i+1}",
-                color=QColor(0, 255, 0),  # Green
+                name=f"SPB{i+1}" if measured else f"SPB{i+1} (ignorée)",
+                color=QColor(0, 255, 0) if measured else QColor(255, 80, 80),
                 is_square=True,
             )
             roi_list.append(roi)
+
+        if skipped:
+            self.statusbar.showMessage(
+                f"SPB : {len(skipped)} ROI hors image ignorée(s) — recentrer le fantôme", 8000)
 
         # Set NPS ROIs with slice range from parameters
         self.image_viewer.viewer.set_nps_rois(roi_list, slice_range=(start_slice, end_slice))
@@ -2000,6 +1996,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
         except Exception as e:
             self._current_results = None
+            # No measurement: do not keep drawing ROIs that no longer mean anything
+            self.image_viewer.viewer.clear_water_rois()
             self._update_results_display()
             self.btn_export.setEnabled(self._nps_results is not None)
             self.statusbar.showMessage(f"Erreur analyse UH: {e}")
@@ -2041,17 +2039,15 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
         except Exception as e:
             self._nps_results = None
+            self.image_viewer.viewer.clear_nps_rois()
             self._update_results_display()
             self.btn_export.setEnabled(self._current_results is not None)
             self.statusbar.showMessage(f"Erreur analyse SPB: {e}")
 
     def _on_reference_field_changed(self):
         """Handle reference field change - debounce before updating comparison."""
-        # Only trigger update if we have results to compare against
-        if self._current_results is None and self._nps_results is None:
-            return
-
-        # Restart debounce timer
+        # Always propagate: the history tab evaluates the "En cours" row with these
+        # references even before an analysis has run
         self._ref_debounce_timer.start()
 
     def _run_debounced_reference_update(self):
@@ -2063,10 +2059,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
         ref_nps_freq = parse_float_fr(ref_nps_freq_text) if ref_nps_freq_text else None
 
-        # Update current device if it exists
-        if self._current_device is not None:
-            self._current_device.reference_noise = ref_noise
-            self._current_device.reference_nps_freq = ref_nps_freq
+        # The device object is only updated by "Enregistrer": editing the field
+        # must not change what an unrelated save later writes to devices.json
         self.history_panel.set_references(ref_noise, ref_nps_freq)
 
         # Update results display to show comparison
@@ -2104,7 +2098,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
     def _show_about(self):
         """Show about dialog."""
-        from PySide6.QtWidgets import QMessageBox
         from cq_tdm import __version__
         about_text = f"""
 <h2>CQ TDM</h2>
@@ -2133,7 +2126,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
     def _inspect_artifacts(self):
         """Open the artifact inspection dialog."""
         if self._current_image is None:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Attention", "Aucune image chargée.")
             return
 
@@ -2220,10 +2212,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 img = self._current_series.images[hu_index]
         nps_start, nps_end = self.image_viewer.get_nps_slice_range()
         return QCRun(
-            run_date=dicom_date_to_iso(img.study_date if img is not None else ""),
+            run_date=dicom_date_to_iso(img.acquisition_date if img is not None else ""),
             series_uid=img.series_instance_uid if img is not None else "",
             kvp=float(img.kvp) if img is not None and img.kvp else 0.0,
-            mas=float(img.tube_current) if img is not None and img.tube_current else 0.0,
+            mas=float(img.mas) if img is not None else 0.0,
             slice_thickness=float(img.slice_thickness) if img is not None else 0.0,
             kernel=img.convolution_kernel if img is not None else "",
             water_ct=self._current_results.water_ct_number,
@@ -2235,6 +2227,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             hu_slice_index=self.image_viewer.get_hu_slice_index(),
             nps_start_slice=nps_start if self._nps_results is not None else None,
             nps_end_slice=nps_end if self._nps_results is not None else None,
+            dicom_folder=self._current_folder,
+            dicom_folder_rel=relative_to_database(self._current_folder, self._device_db.db_path)
+            if self._current_folder else "",
             notes=self._user_notes,
             software_version=__version__,
             recorded_at=datetime.now().isoformat(timespec="seconds"),
@@ -2308,6 +2303,131 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._device_db.update_run(self._current_device.device_id, run)
         except (OSError, ValueError) as e:
             QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer le nouveau chemin :\n{e}")
+
+    # ---- reload the DICOM series of a recorded control ----
+
+    def _load_run_series(self, run: QCRun):
+        """Load the DICOM series of a recorded control into the viewer.
+
+        The folder is looked up from the stored path, the path relative to the
+        database, and the relocations learnt earlier; if none matches the series
+        UID the user can point at the folder or have a directory scanned. The
+        run's HU slice and SPB range are then applied so the screen shows the
+        control as it was measured. References are the installation's current
+        ones: a new export is a new evaluation.
+        """
+        if self._current_device is None:
+            return
+        folder = resolve_dicom_folder(
+            run.series_uid, run.dicom_folder, run.dicom_folder_rel,
+            self._device_db.db_path, self._device_db.folder_relocations)
+        if folder is None:
+            folder = self._ask_run_folder(run)
+            if folder is None:
+                return
+        self._load_dicom_folder(str(folder))
+        if self._current_series is None or self._current_image is None \
+                or self._current_image.series_instance_uid != run.series_uid:
+            QMessageBox.warning(
+                self, "Série différente",
+                f"Les images chargées depuis {folder} n'appartiennent pas à la série du contrôle "
+                f"du {run.date_fr()}.")
+            return
+        n = self._current_series.num_images
+        needed = max(run.hu_slice_index or 0, run.nps_end_slice or 0)
+        if needed >= n:
+            QMessageBox.warning(
+                self, "Série incomplète",
+                f"Le contrôle utilisait la coupe {needed + 1} mais le dossier ne contient que "
+                f"{n} image{'s' if n > 1 else ''}. Les coupes ont été ramenées dans la série chargée.")
+        if run.hu_slice_index is not None:
+            self.image_viewer.set_hu_slice_index(run.hu_slice_index)
+        if run.nps_start_slice is not None and run.nps_end_slice is not None:
+            self.image_viewer.set_nps_slice_range(run.nps_start_slice, run.nps_end_slice)
+        if run.hu_slice_index is not None:
+            self.image_viewer.set_current_slice(self.image_viewer.get_hu_slice_index())
+            self._on_slice_changed(self.image_viewer.get_hu_slice_index())
+        self._results_tabs.setCurrentIndex(0)
+        self.statusbar.showMessage(
+            f"Série du contrôle du {run.date_fr()} chargée ({n} images) — coupes du contrôle appliquées, "
+            "valeurs de référence actuelles de l'installation", 8000)
+
+    def _ask_run_folder(self, run: QCRun) -> Path | None:
+        """Offer to locate or search for the series of ``run``; None if cancelled."""
+        where = run.dicom_folder or "(dossier non enregistré pour ce contrôle)"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Images DICOM introuvables")
+        box.setText(f"Le dossier DICOM du contrôle du {run.date_fr()} est introuvable :\n{where}")
+        box.setInformativeText(
+            "Indiquez son nouvel emplacement, ou laissez CQ TDM le rechercher dans un dossier "
+            "d'archive. La série est vérifiée par son identifiant DICOM avant toute utilisation.")
+        btn_locate = box.addButton("Localiser…", QMessageBox.ButtonRole.AcceptRole)
+        btn_search = box.addButton("Rechercher dans…", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_locate:
+            return self._locate_run_folder(run)
+        if clicked is btn_search:
+            return self._search_run_folder(run)
+        return None
+
+    def _locate_run_folder(self, run: QCRun) -> Path | None:
+        old = Path(run.dicom_folder) if run.dicom_folder else None
+        start = str(old.parent) if old is not None and old.parent.exists() else ""
+        chosen = QFileDialog.getExistingDirectory(self, "Localiser le dossier DICOM du contrôle", start)
+        if not chosen:
+            return None
+        folder = Path(chosen)
+        if not folder_matches(folder, run.series_uid):
+            QMessageBox.warning(
+                self, "Série différente",
+                "Ce dossier ne contient pas la série du contrôle sélectionné.\n\n"
+                f"Identifiant attendu :\n{run.series_uid}")
+            return None
+        self._remember_run_folder(run, folder)
+        return folder
+
+    def _search_run_folder(self, run: QCRun) -> Path | None:
+        root = QFileDialog.getExistingDirectory(self, "Dossier dans lequel rechercher la série", "")
+        if not root:
+            return None
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        progress = QProgressDialog("Recherche de la série…", "Annuler", 0, 0, self)
+        progress.setWindowTitle("Recherche")
+        progress.setMinimumDuration(300)
+        progress.setValue(0)
+
+        def visit(folder: Path) -> bool:
+            progress.setLabelText(f"Recherche de la série…\n{folder}")
+            QApplication.processEvents()
+            return not progress.wasCanceled()
+
+        found = find_series_folder(Path(root), run.series_uid, progress=visit)
+        cancelled = progress.wasCanceled()
+        progress.close()
+        if found is None:
+            if not cancelled:
+                QMessageBox.information(
+                    self, "Série introuvable",
+                    f"Aucun dossier de {root} ne contient la série du contrôle du {run.date_fr()}.")
+            return None
+        self._remember_run_folder(run, found)
+        return found
+
+    def _remember_run_folder(self, run: QCRun, folder: Path):
+        """Store the found folder on the run and learn the relocation for the other runs."""
+        new_path = str(folder.resolve())
+        relocation = relocation_between(run.dicom_folder, new_path)
+        run.dicom_folder = new_path
+        run.dicom_folder_rel = relative_to_database(new_path, self._device_db.db_path)
+        try:
+            self._device_db.update_run(self._current_device.device_id, run)
+            if relocation is not None:
+                self._device_db.add_relocation(*relocation)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer l'emplacement des images :\n{e}")
 
     def _format_results_html(self) -> str:
         """Format all results as HTML."""
@@ -2386,15 +2506,15 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             <div class="section-title">Uniformité</div>
             <table>
                 <tr><th>Écart max C-P</th><td class="value">{format_fr(r.uniformity, 1)} HU</td></tr>
-                <tr><th>Critère</th><td>≤7 HU (NCG: &gt;25 HU)</td></tr>
-                <tr><th>Statut</th><td>{status_html(r.uniformity_acceptable, r.uniformity_ncg)}</td></tr>
+                <tr><th>Critère</th><td>≤7 HU</td></tr>
+                <tr><th>Statut</th><td>{status_html(r.uniformity_acceptable)}</td></tr>
             </table>
         </div>
 
         <div class="section">
             <div class="section-title">Bruit</div>
             <table>
-                <tr><th>Écart-type central</th><td class="value">{format_fr(r.noise, 1)} HU</td></tr>
+                <tr><th>Écart-type central</th><td class="value">{format_fr(r.noise, 2)} HU</td></tr>
                 {self._format_noise_stability_html(r.noise)}
             </table>
         </div>
@@ -2590,9 +2710,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         deviation = noise - ref_noise
 
         # ANSM criterion: MIN(-0.2, -0.1*B_ref) ≤ (B_i - B_ref) ≤ MAX(0.2, 0.1*B_ref)
-        lower_bound = min(-0.2, -0.1 * ref_noise)
-        upper_bound = max(0.2, 0.1 * ref_noise)
-        is_conforme = lower_bound <= deviation <= upper_bound
+        # (same evaluation as the history and the PDF)
+        lower_bound, upper_bound = noise_bounds(ref_noise)
+        is_conforme = noise_status(noise, ref_noise) == OK
 
         if is_conforme:
             status_html = '<span class="ok">✓ Conforme</span>'
@@ -2600,7 +2720,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             status_html = '<span class="nc">✗ Non conforme</span>'
 
         return f"""
-                <tr><th>Valeur de référence</th><td class="value">{format_fr(ref_noise, 1)} HU</td></tr>
+                <tr><th>Valeur de référence</th><td class="value">{format_fr(ref_noise, 2)} HU</td></tr>
                 <tr><th>Écart</th><td class="value">{format_fr(deviation, 2, sign=True)} HU</td></tr>
                 <tr><th>Critère</th><td>[{format_fr(lower_bound, 2, sign=True)}, {format_fr(upper_bound, 2, sign=True)}] HU</td></tr>
                 <tr><th>Statut</th><td>{status_html}</td></tr>
@@ -2618,7 +2738,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         """
 
         deviation_pct = ((mean_freq - ref_freq) / ref_freq) * 100
-        is_conforme = -10.0 <= deviation_pct <= 10.0
+        is_conforme = nps_status(mean_freq, ref_freq) == OK
 
         if is_conforme:
             status_html = '<span class="ok">✓ Conforme</span>'
@@ -2825,6 +2945,16 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_nps_end = device.nps_end_slice
             # Apply slice values if they exist and we have a series loaded
             if self._current_series is not None:
+                # A slice saved for a longer series can never be reached here: compare
+                # against what the viewer can actually show, or the "modified" state
+                # and the reset button would stay on for good
+                last = self._current_series.num_images - 1
+                if self._saved_hu_slice is not None:
+                    self._saved_hu_slice = max(0, min(self._saved_hu_slice, last))
+                if self._saved_nps_start is not None and self._saved_nps_end is not None:
+                    lo = max(0, min(self._saved_nps_start, last))
+                    hi = max(0, min(self._saved_nps_end, last))
+                    self._saved_nps_start, self._saved_nps_end = min(lo, hi), max(lo, hi)
                 if device.hu_slice_index is not None:
                     self.image_viewer.set_hu_slice_index(device.hu_slice_index)
                 if device.nps_start_slice is not None and device.nps_end_slice is not None:
@@ -2873,13 +3003,23 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         # Create or update device config
         img = self._current_image
         if self._current_device is None:
-            # Create new device from DICOM metadata
-            device = DeviceConfig.from_dicom(
+            # The id is derived from the DICOM identity, so a device saved earlier
+            # for this scanner must be updated, not replaced (that would wipe its
+            # recorded controls)
+            device = self._device_db.find_device(
                 img.manufacturer or "",
                 img.model_name or "",
                 img.station_name or "",
                 img.device_serial_number or "",
             )
+            if device is None:
+                # Create new device from DICOM metadata
+                device = DeviceConfig.from_dicom(
+                    img.manufacturer or "",
+                    img.model_name or "",
+                    img.station_name or "",
+                    img.device_serial_number or "",
+                )
         else:
             device = self._current_device
 
@@ -2934,6 +3074,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
         # Refresh combo and select the saved device
         self._refresh_device_combo()
+
+        # History tab now evaluates against the saved references
+        self._refresh_history(device)
 
         # Re-run analysis display to compare with new reference values
         self._update_results_display()
@@ -2993,8 +3136,11 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 f"Installation reconnue : {device.display_name()}"
             )
         else:
-            # Device not found - create a new config from DICOM but don't save yet
+            # Device not found: clear everything that belonged to the previous
+            # device (references, identity, history) so the new scanner is not
+            # judged against, or reported with, another installation's values
             self._current_device = None
+            self._load_device_config(None)
             # Pre-fill device name from DICOM
             device_name = f"{img.manufacturer or ''} {img.model_name or ''}".strip()
             if device_name:
@@ -3003,6 +3149,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._device_combo.blockSignals(True)
             self._device_combo.setCurrentIndex(0)
             self._device_combo.blockSignals(False)
+            self._update_install_summary()
 
     def _show_device_manager(self):
         """Show the device management dialog."""
@@ -3010,5 +3157,13 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         dialog.exec()
         # Update device_db reference if it was changed in the dialog
         self._device_db = dialog.device_db
+        # The dialog may have edited, deleted or replaced (new database) the
+        # device shown here: resolve it again by id and reload its values so the
+        # results panel, the PDF and the history never use a stale object
+        current_id = self._current_device.device_id if self._current_device else None
+        self._current_device = self._device_db.get_device(current_id) if current_id else None
+        self._load_device_config(self._current_device)
         # Refresh combo after dialog closes (in case devices were modified)
         self._refresh_device_combo()
+        self._update_results_display()
+        self._update_install_summary()

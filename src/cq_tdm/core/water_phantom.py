@@ -89,8 +89,8 @@ class WaterPhantomResults:
     # Acceptance criteria results
     water_ct_acceptable: bool = True  # Within ±7 HU
     water_ct_ncg: bool = False  # NCG if outside ±25 HU
+    # Uniformity has no "grave" tier in the ANSM decision (only ±7 HU)
     uniformity_acceptable: bool = True  # Within ±7 HU from center
-    uniformity_ncg: bool = False  # NCG if outside ±25 HU
 
     @property
     def peripheral(self) -> list[ROIMeasurement]:
@@ -111,7 +111,6 @@ class WaterPhantomResults:
             "water_ct_acceptable": self.water_ct_acceptable,
             "water_ct_ncg": self.water_ct_ncg,
             "uniformity_acceptable": self.uniformity_acceptable,
-            "uniformity_ncg": self.uniformity_ncg,
         }
 
 
@@ -302,9 +301,9 @@ def analyze_water_phantom(
     water_ct_acceptable = abs(water_ct) <= 7
     water_ct_ncg = abs(water_ct) > 25  # NCG if outside ±25 HU
 
-    # Uniformity: acceptable if peripheral within ±7 HU of central
+    # Uniformity: acceptable if peripheral within ±7 HU of central.
+    # The decision defines no NCG threshold for uniformity.
     uniformity_acceptable = uniformity <= 7
-    uniformity_ncg = uniformity > 25  # NCG threshold
 
     return WaterPhantomResults(
         central=central,
@@ -318,7 +317,6 @@ def analyze_water_phantom(
         water_ct_acceptable=water_ct_acceptable,
         water_ct_ncg=water_ct_ncg,
         uniformity_acceptable=uniformity_acceptable,
-        uniformity_ncg=uniformity_ncg,
     )
 
 
@@ -336,11 +334,11 @@ def format_results_text(results: WaterPhantomResults) -> str:
         "",
         "UNIFORMITÉ",
         f"  Écart max centre-périphérie: {results.uniformity:.1f} HU",
-        "  Critère: ≤7 HU (NCG: >25 HU)",
-        f"  Statut: {'✓ CONFORME' if results.uniformity_acceptable else ('✗ NCG' if results.uniformity_ncg else '✗ NON CONFORME')}",
+        "  Critère: ≤7 HU",
+        f"  Statut: {'✓ CONFORME' if results.uniformity_acceptable else '✗ NON CONFORME'}",
         "",
         "BRUIT",
-        f"  Écart-type central: {results.noise:.1f} HU",
+        f"  Écart-type central: {results.noise:.2f} HU",
         "",
         "DÉTAIL PAR ROI",
         f"  Centre:  {results.central.mean_hu:+6.1f} ± {results.central.std_hu:.1f} HU ({results.central.num_pixels} px)",

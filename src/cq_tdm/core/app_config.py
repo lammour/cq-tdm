@@ -31,7 +31,10 @@ class AppConfig:
         """
         base_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation)
         config_dir = Path(base_path) / "cq_tdm"
-        config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # Read-only location: callers handle the failing open()
         return config_dir
 
     @classmethod

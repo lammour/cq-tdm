@@ -70,6 +70,10 @@ class QCRun:
     nps_end_slice: int | None = None
 
     pdf_path: str = ""
+    # Folder the series was analysed from, so the report can be rebuilt from the
+    # images: absolute, and relative to devices.json (see core.dicom_locator)
+    dicom_folder: str = ""
+    dicom_folder_rel: str = ""
     notes: str = ""
     software_version: str = ""
     recorded_at: str = ""  # ISO datetime of the export

@@ -155,3 +155,66 @@ def test_trend_chart_renders_and_reports_hit_positions():
 
     empty = render_trend_chart([], "nps_freq", None, None, width_px=300, height_px=150)
     assert empty.hits == []
+
+
+# --- consistency between the PDF, the results panel and the history ---------
+
+def test_dicom_image_mas_prefers_exposure_tag():
+    import numpy as np
+    from cq_tdm.core.dicom_loader import DicomImage
+
+    blank = np.zeros((4, 4))
+    assert DicomImage(pixel_array=blank, exposure=150.0, tube_current=300.0, exposure_time=1000.0).mas == 150.0
+    assert DicomImage(pixel_array=blank, tube_current=200.0, exposure_time=500.0).mas == 100.0
+    assert DicomImage(pixel_array=blank, tube_current=200.0).mas == 0.0
+
+
+def test_report_filename_uses_scan_date():
+    from cq_tdm.reports.pdf_report import generate_report_filename
+
+    name = generate_report_filename("SIEMENS Edge", "666", date="20260315")
+    assert name == "CQI-trimestriel_SIEMENS-Edge_666_2026-03-15.pdf"
+
+
+def test_pdf_overall_status_matches_history_criteria():
+    """The PDF badge must apply the same boundary rule (with epsilon) as evaluate_run."""
+    from cq_tdm.core.water_phantom import ROIMeasurement, WaterPhantomResults
+    from cq_tdm.reports.pdf_report import PDFReportGenerator, _ensure_reportlab
+
+    _ensure_reportlab()
+
+    def roi(mean, std=2.2):
+        return ROIMeasurement("r", 0, 0, 5, mean, std, mean - 1, mean + 1, 100)
+
+    results = WaterPhantomResults(
+        central=roi(0.0), top=roi(1.0), right=roi(1.0), bottom=roi(1.0), left=roi(1.0),
+        water_ct_number=0.0, uniformity=1.0, noise=2.2,
+    )
+    assert not hasattr(results, "uniformity_ncg")
+    # 2.2 - 2.0 is 0.20000000000000018 in floating point: still conforme, like the history
+    gen = PDFReportGenerator(reference_noise=2.0)
+    status, _color, _action = gen._compute_overall_status(results, None, None)
+    assert status == "CONFORME"
+    assert evaluate_run(_run(noise=2.2, ref_noise=2.0))["noise"] == OK
+
+    # Uniformity above 25 HU is NC, never NCG
+    results.uniformity, results.uniformity_acceptable = 30.0, False
+    status, _color, _action = gen._compute_overall_status(results, None, None)
+    assert status == "NON CONFORME"
+    assert evaluate_run(_run(uniformity=30.0))["uniformity"] == NC
+
+
+def test_scan_date_falls_back_when_study_date_is_blank():
+    from pydicom.dataset import Dataset
+
+    from cq_tdm.core.dicom_loader import _scan_date
+
+    ds = Dataset()
+    assert _scan_date(ds) == ""
+    ds.InstanceCreationDate = "20241206"
+    assert _scan_date(ds) == "20241206"
+    ds.ContentDate = ""
+    ds.AcquisitionDate = "20241205"
+    assert _scan_date(ds) == "20241205"
+    ds.StudyDate = "20241204"
+    assert _scan_date(ds) == "20241204"

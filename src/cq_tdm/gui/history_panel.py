@@ -70,6 +70,7 @@ class HistoryPanel(QWidget):
     reference_requested = Signal(object)  # QCRun
     delete_requested = Signal(object)  # QCRun
     pdf_relinked = Signal(object, str)  # QCRun, new path
+    load_series_requested = Signal(object)  # QCRun: load its DICOM series in the viewer
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -144,11 +145,16 @@ class HistoryPanel(QWidget):
         self._btn_ref.clicked.connect(self._promote_to_reference)
         self._btn_pdf = QPushButton("Ouvrir le PDF")
         self._btn_pdf.clicked.connect(self._open_pdf)
+        self._btn_load = QPushButton("Charger la série DICOM")
+        self._btn_load.setToolTip(
+            "Recharger les images de ce contrôle dans la visionneuse avec les coupes UH et SPB "
+            "utilisées lors du contrôle.\nUn nouvel export remplace alors le contrôle dans l'historique.")
+        self._btn_load.clicked.connect(self._load_selected_series)
         self._btn_delete = QPushButton("Supprimer")
         self._btn_delete.clicked.connect(self._delete_selected)
         self._btn_csv = QPushButton("Exporter CSV")
         self._btn_csv.clicked.connect(self._export_csv)
-        for b in (self._btn_ref, self._btn_pdf, self._btn_delete):
+        for b in (self._btn_ref, self._btn_pdf, self._btn_load, self._btn_delete):
             b.setEnabled(False)
             btn_row.addWidget(b)
         btn_row.addStretch(1)
@@ -251,6 +257,9 @@ class HistoryPanel(QWidget):
         recorded = run is not None and not run.is_current
         self._btn_ref.setEnabled(run is not None and run.nps_freq is not None)
         self._btn_delete.setEnabled(recorded)
+        # Loading needs the series identity; runs recorded before the folder was
+        # stored can still be loaded by locating the folder by hand
+        self._btn_load.setEnabled(recorded and bool(run.series_uid))
         if recorded and run.pdf_path:
             exists = Path(run.pdf_path).is_file()
             self._btn_pdf.setEnabled(True)
@@ -283,6 +292,11 @@ class HistoryPanel(QWidget):
         if new_path:
             self.pdf_relinked.emit(run, new_path)
             self._on_selection_changed()
+
+    def _load_selected_series(self):
+        run = self._selected_run()
+        if run is not None and not run.is_current:
+            self.load_series_requested.emit(run)
 
     def _delete_selected(self):
         run = self._selected_run()
@@ -326,6 +340,8 @@ class HistoryPanel(QWidget):
             lines += ["", f"<i>{run.notes}</i>"]
         if run.pdf_path:
             lines += ["", f"Rapport : {run.pdf_path}"]
+        if run.dicom_folder:
+            lines.append(f"Images : {run.dicom_folder}")
         if run.software_version:
             lines.append(f"CQ TDM {run.software_version}")
         QMessageBox.information(self, "Détail du contrôle", "<br>".join(lines))

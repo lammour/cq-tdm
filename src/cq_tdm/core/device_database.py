@@ -147,6 +147,9 @@ class DeviceDatabase:
 
         self.db_path = db_path
         self._devices: dict[str, DeviceConfig] = {}
+        # (old_prefix, new_prefix) pairs learnt when the user relocated a DICOM
+        # folder; used to find the other folders of the same moved archive
+        self.folder_relocations: list[tuple[str, str]] = []
         # Set when the existing file could not be read; the file is then backed up
         # before any save so that a corrupt or newer-format database is never
         # silently overwritten with an empty one.
@@ -164,6 +167,11 @@ class DeviceDatabase:
             for device_data in data.get("devices", []):
                 device = DeviceConfig.from_dict(device_data)
                 self._devices[device.device_id] = device
+            self.folder_relocations = [
+                (str(r["old"]), str(r["new"]))
+                for r in data.get("folder_relocations", [])
+                if isinstance(r, dict) and r.get("old") and r.get("new")
+            ]
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
             self.load_error = f"{self.db_path}: {e}"
             self._devices = {}
@@ -181,10 +189,15 @@ class DeviceDatabase:
         """Save devices to the database file."""
         data = {
             "version": 2,
-            "devices": [d.to_dict() for d in self._devices.values()]
+            "devices": [d.to_dict() for d in self._devices.values()],
+            "folder_relocations": [{"old": o, "new": n} for o, n in self.folder_relocations],
         }
-        with open(self.db_path, "w", encoding="utf-8") as f:
+        # Write to a temporary file and swap it in, so that a crash or a full
+        # disk mid-write cannot leave a truncated database behind.
+        tmp_path = self.db_path.with_name(self.db_path.name + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        tmp_path.replace(self.db_path)
 
     def get_all_devices(self) -> list[DeviceConfig]:
         """Get all saved devices."""
@@ -252,6 +265,14 @@ class DeviceDatabase:
             self._save()
             return True
         return False
+
+    def add_relocation(self, old_prefix: str, new_prefix: str, keep: int = 20):
+        """Remember that folders under ``old_prefix`` now live under ``new_prefix``."""
+        pair = (old_prefix, new_prefix)
+        self.folder_relocations = [r for r in self.folder_relocations if r != pair]
+        self.folder_relocations.append(pair)
+        del self.folder_relocations[:-keep]
+        self._save()
 
     def delete_device(self, device_id: str) -> bool:
         """Delete a device from the database."""
