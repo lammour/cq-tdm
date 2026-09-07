@@ -22,12 +22,17 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
 - **Gestion des ROI** :
   - Détection automatique du fantôme et placement des ROI
   - Export des ROI (JSON, compatible avec IQMetrix-CT)
-- **Génération de rapports PDF**
+- **Génération de rapports PDF** avec statuts de conformité, valeurs de référence et historique des contrôles
+- **Historique des résultats** :
+  - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
+  - Onglet « Historique » : tableau des contrôles et graphique de tendance par grandeur avec la bande de tolérance ANSM ; un clic sur un point sélectionne le contrôle
+  - Définition des valeurs de référence à partir d'un contrôle passé, export CSV, ouverture du rapport PDF associé
 - **Base de données des appareils** :
-  - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB) et des informations d'identification
+  - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification et des coupes de mesure
   - Détection automatique des appareils enregistrés
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
-  
+  - L'historique des contrôles est stocké dans le même fichier que les appareils (`devices.json`)
+
 
 ## Cadre réglementaire
 
@@ -131,11 +136,12 @@ pip install -e .
 ## Utilisation
 
 1. Lancer l'application
-2. Charger une série DICOM
-3. Modifier les détails de l'appareil, les valeurs de référence et les coupes de mesure
-4. Enregistrer
-5. Vérifier les artéfacts
-6. Générer le rapport PDF
+2. Charger une série DICOM (l'installation est reconnue automatiquement si elle a déjà été enregistrée)
+3. Choisir les coupes de mesure sous le curseur de coupe ; « Réinit. coupes » revient aux coupes enregistrées
+4. Cliquer sur « Modifier… » pour renseigner l'installation et les valeurs de référence, puis « Enregistrer »
+5. Vérifier les artéfacts et ajouter une observation si nécessaire
+6. Cliquer sur « Enregistrer les résultats et exporter le PDF » : le rapport est généré et le contrôle est ajouté à l'historique de l'installation
+7. Consulter l'onglet « Historique » pour suivre l'évolution des mesures d'un contrôle à l'autre
 
 ## Signaler un problème
 
