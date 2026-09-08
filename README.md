@@ -82,7 +82,7 @@ Téléchargez [`CQ_TDM_Portable_Windows.exe`](https://github.com/lammour/cq-tdm/
 
 ### GNU/Linux
 
-Testé sous Ubuntu 24.04.3 LTS.
+Testé sous Ubuntu 26.04 LTS.
 
 **Méthode recommandée : Script d'installation**
 
@@ -119,7 +119,7 @@ Le script installe l'application sous le nom **CQ TDM** et crée un raccourci da
 
 ## Installation pour le développement
 
-Testé sous Ubuntu 24.04.3 LTS avec Python 3.12.
+Testé sous Ubuntu 26.04 LTS avec Python 3.14.
 
 ```bash
 # Cloner le dépôt
