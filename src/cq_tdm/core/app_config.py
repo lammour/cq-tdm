@@ -14,6 +14,10 @@ class AppConfig:
     # Report settings
     report_logo_path: str = ""
     report_logo_scale: float = 0.4  # Logo scale (10-100% of page width)
+    # Append the "Historique des contrôles" section (table + trend charts) to the
+    # PDF. Off by default: the report of one control stands on its own, and past
+    # controls are not always meant to be handed over with it.
+    report_include_history: bool = False
 
     # Database settings
     device_database_path: str = ""  # Custom path to devices.json (empty = default)

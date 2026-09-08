@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QSpinBox,
     QTabWidget,
+    QCheckBox,
 )
 
 # Lightweight imports - no heavy dependencies
@@ -585,6 +586,19 @@ class ReportSettingsDialog(QDialog):
         scale_row.addStretch()
         layout.addLayout(scale_row)
 
+        # Content options
+        content_label = QLabel("Contenu :")
+        content_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(content_label)
+
+        self._check_history = QCheckBox("Inclure l'historique des contrôles")
+        self._check_history.setToolTip(
+            "Ajoute au rapport une section « Historique des contrôles » : tableau des dix "
+            "derniers contrôles enregistrés pour l'installation et courbes de tendance du "
+            "bruit et de la fréquence moyenne SPB."
+        )
+        layout.addWidget(self._check_history)
+
         layout.addStretch()
 
         # Buttons
@@ -602,6 +616,7 @@ class ReportSettingsDialog(QDialog):
             self._selected_logo_path = config.report_logo_path
             self._update_logo_display()
         self._scale_spinbox.setValue(int(config.report_logo_scale * 100))
+        self._check_history.setChecked(config.report_include_history)
 
     def _select_logo(self):
         """Select a logo file."""
@@ -650,6 +665,7 @@ class ReportSettingsDialog(QDialog):
         config = get_app_config()
         config.report_logo_path = self._selected_logo_path
         config.report_logo_scale = self._scale_spinbox.value() / 100.0
+        config.report_include_history = self._check_history.isChecked()
         save_app_config()
         self.accept()
 
@@ -1825,7 +1841,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                 # replaced by this one in the history, so it must not appear as a
                 # separate past control in the report
                 history = []
-                if self._current_device is not None:
+                if self._current_device is not None and get_app_config().report_include_history:
                     current_uid = report_image.series_instance_uid
                     history = [r for r in self._current_device.runs
                                if not (current_uid and r.run_id == current_uid)]

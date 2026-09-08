@@ -22,7 +22,7 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
 - **Gestion des ROI** :
   - Détection automatique du fantôme et placement des ROI
   - Export des ROI (JSON, compatible avec IQMetrix-CT)
-- **Génération de rapports PDF** avec statuts de conformité, valeurs de référence et historique des contrôles
+- **Génération de rapports PDF** avec statuts de conformité et valeurs de référence ; section « Historique des contrôles » optionnelle (« Configuration > Rapports… », désactivée par défaut)
 - **Historique des résultats** :
   - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
   - Onglet « Historique » : tableau des contrôles et graphique de tendance par grandeur avec la bande de tolérance ANSM ; un clic sur un point sélectionne le contrôle
