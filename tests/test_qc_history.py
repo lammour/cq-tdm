@@ -169,6 +169,52 @@ def test_dicom_image_mas_prefers_exposure_tag():
     assert DicomImage(pixel_array=blank, tube_current=200.0).mas == 0.0
 
 
+def test_dicom_image_rotation_time_prefers_revolution_time():
+    """RevolutionTime wins over ExposureTime, which can hold the whole spiral."""
+    import numpy as np
+    from cq_tdm.core.dicom_loader import DicomImage
+
+    blank = np.zeros((4, 4))
+    # A real GE spiral: 1 s per rotation, 16.758 s of acquisition
+    spiral = DicomImage(pixel_array=blank, revolution_time=1.0, exposure_time=16758.0)
+    assert spiral.rotation_time == 1.0
+    # Without the tag, ExposureTime in ms is the only estimate left
+    assert DicomImage(pixel_array=blank, exposure_time=500.0).rotation_time == 0.5
+    assert DicomImage(pixel_array=blank).rotation_time == 0.0
+
+
+def test_dicom_image_mas_fallback_uses_rotation_time():
+    """The mAs fallback must not multiply the current by a whole spiral."""
+    import numpy as np
+    from cq_tdm.core.dicom_loader import DicomImage
+
+    blank = np.zeros((4, 4))
+    spiral = DicomImage(pixel_array=blank, tube_current=350.0,
+                        revolution_time=1.0, exposure_time=16758.0)
+    assert spiral.mas == 350.0  # not 350 × 16.758
+    assert DicomImage(pixel_array=blank, tube_current=200.0,
+                      revolution_time=0.5).mas == 100.0
+
+
+def test_ctdi_phantom_names_are_shortened():
+    """The phantom decides how CTDIvol reads, so it must survive extraction."""
+    import pydicom
+    from pydicom.dataset import Dataset
+    from cq_tdm.core.dicom_loader import _ctdi_phantom
+
+    def phantom(meaning: str) -> Dataset:
+        item = Dataset()
+        item.CodeMeaning = meaning
+        ds = Dataset()
+        ds.CTDIPhantomTypeCodeSequence = pydicom.Sequence([item])
+        return ds
+
+    assert _ctdi_phantom(phantom("IEC Head Dosimetry Phantom")) == "tête 16 cm"
+    assert _ctdi_phantom(phantom("IEC Body Dosimetry Phantom")) == "corps 32 cm"
+    assert _ctdi_phantom(phantom("Autre fantôme")) == "Autre fantôme"
+    assert _ctdi_phantom(Dataset()) == ""
+
+
 def test_report_filename_uses_scan_date():
     from cq_tdm.reports.pdf_report import generate_report_filename
 

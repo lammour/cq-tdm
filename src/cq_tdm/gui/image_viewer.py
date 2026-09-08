@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QTimer
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QWheelEvent, QMouseEvent, QCursor, QShowEvent, QResizeEvent
+from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QTimer, QUrl
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QWheelEvent, QMouseEvent, QCursor, QShowEvent, QResizeEvent, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.app_config import get_app_config
+from .theme import primary_button_style, theme_colors, tooltip_style
 
 if TYPE_CHECKING:
     from ..core.dicom_loader import DicomImage
@@ -980,22 +982,9 @@ class ImageViewerWidget(QWidget):
         welcome_layout.addSpacing(20)
 
         btn_open_folder = QPushButton("Ouvrir un dossier DICOM...")
-        btn_open_folder.setStyleSheet("""
-            QPushButton {
-                padding: 12px 24px;
-                font-size: 14px;
-                background-color: #0d47a1;
-                color: white;
-                border: none;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #1565c0;
-            }
-            QPushButton:pressed {
-                background-color: #0a3d91;
-            }
-        """)
+        # Same accent fill as the other primary actions, from the theme palette
+        btn_open_folder.setStyleSheet(
+            primary_button_style(padding="12px 24px", font_size="14px", radius="6px"))
         btn_open_folder.clicked.connect(self.open_folder_requested.emit)
         welcome_layout.addWidget(btn_open_folder, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1100,6 +1089,12 @@ class ImageViewerWidget(QWidget):
         # ROI toggle overlay (bottom-right corner of image)
         self._create_roi_overlay()
 
+        # Folder path overlay (top-right corner of image)
+        self._create_folder_overlay()
+
+        # Image information overlay (top-left corner of image)
+        self._create_info_overlay()
+
         # Slice selection controls (used by MainWindow)
         self._setup_slice_controls()
 
@@ -1107,10 +1102,15 @@ class ImageViewerWidget(QWidget):
         """Create ROI toggle switches overlay on the image viewer."""
         # Create overlay container as child of self (not viewer_stack)
         self.roi_overlay = QWidget(self)
-        if get_app_config().theme == "light":
-            self.roi_overlay.setStyleSheet("background-color: rgba(240, 240, 240, 200); border-radius: 8px;")
-        else:
-            self.roi_overlay.setStyleSheet("background-color: rgba(30, 30, 30, 200); border-radius: 8px;")
+        panel = ("rgba(240, 240, 240, 200)" if get_app_config().theme == "light"
+                 else "rgba(30, 30, 30, 200)")
+        # Scope by object name. Bare declarations would swallow the QToolTip rule
+        # that follows, and a class selector such as QWidget or QLabel would also
+        # match the tooltip itself, which is a QLabel living in its own window.
+        self.roi_overlay.setObjectName("roiOverlay")
+        self.roi_overlay.setStyleSheet(
+            f"#roiOverlay {{ background-color: {panel}; border-radius: 8px; }}"
+            + tooltip_style())
 
         overlay_layout = QVBoxLayout(self.roi_overlay)
         overlay_layout.setContentsMargins(10, 8, 10, 8)
@@ -1121,59 +1121,181 @@ class ImageViewerWidget(QWidget):
         title_label.setStyleSheet("color: #ccc; background: transparent;")
         overlay_layout.addWidget(title_label)
 
-        # UH ROI toggle row
-        uh_row = QWidget()
-        uh_row.setStyleSheet("background: transparent;")
-        uh_layout = QHBoxLayout(uh_row)
-        uh_layout.setContentsMargins(0, 0, 0, 0)
-        uh_layout.setSpacing(4)
-
-        uh_layout.addStretch()
-
-        uh_label = QLabel("UH")
-        uh_label.setStyleSheet("color: #ffcc00; font-weight: bold;")
-        uh_layout.addWidget(uh_label)
-
-        self.toggle_water_rois = ToggleSwitch(checked=True)
-        self.toggle_water_rois.setToolTip("Afficher/masquer les ROI UH (U)")
-        self.toggle_water_rois.toggled.connect(self._on_water_toggle)
-        uh_layout.addWidget(self.toggle_water_rois)
-
-        overlay_layout.addWidget(uh_row)
-
-        # SPB ROI toggle row
-        spb_row = QWidget()
-        spb_row.setStyleSheet("background: transparent;")
-        spb_layout = QHBoxLayout(spb_row)
-        spb_layout.setContentsMargins(0, 0, 0, 0)
-        spb_layout.setSpacing(4)
-
-        spb_layout.addStretch()
-
-        spb_label = QLabel("SPB")
-        spb_label.setStyleSheet("color: #00cc00; font-weight: bold;")
-        spb_layout.addWidget(spb_label)
-
-        self.toggle_nps_rois = ToggleSwitch(checked=True)
-        self.toggle_nps_rois.setToolTip("Afficher/masquer les ROI SPB (S)")
-        self.toggle_nps_rois.toggled.connect(self._on_nps_toggle)
-        spb_layout.addWidget(self.toggle_nps_rois)
-
-        overlay_layout.addWidget(spb_row)
+        self.toggle_water_rois = self._add_overlay_toggle(
+            overlay_layout, "UH", "#ffcc00",
+            "Afficher/masquer les ROI UH (U)", self._on_water_toggle)
+        self.toggle_nps_rois = self._add_overlay_toggle(
+            overlay_layout, "SPB", "#00cc00",
+            "Afficher/masquer les ROI SPB (S)", self._on_nps_toggle)
+        # Controls the top-left image information and the folder path together
+        self.toggle_info = self._add_overlay_toggle(
+            overlay_layout, "Infos", "#cccccc",
+            "Afficher/masquer les informations de l'image et le chemin du dossier (I)",
+            self._on_info_toggle)
 
         # Set fixed size, initially hidden until image loaded
         self.roi_overlay.adjustSize()
         self.roi_overlay.hide()
 
+    def _add_overlay_toggle(self, layout, text: str, color: str, tooltip: str,
+                            slot) -> ToggleSwitch:
+        """Add one right-aligned "label + switch" row to the overlay panel."""
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        row_layout.addStretch()
+
+        label = QLabel(text)
+        label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        row_layout.addWidget(label)
+
+        toggle = ToggleSwitch(checked=True)
+        toggle.setToolTip(tooltip)
+        toggle.toggled.connect(slot)
+        row_layout.addWidget(toggle)
+
+        layout.addWidget(row)
+        return toggle
+
+    def _create_folder_overlay(self):
+        """Create the clickable DICOM folder path shown over the image."""
+        self.folder_overlay = QLabel(self)
+        is_light = get_app_config().theme == "light"
+        bg = "rgba(240, 240, 240, 200)" if is_light else "rgba(30, 30, 30, 200)"
+        self.folder_overlay.setObjectName("folderOverlay")
+        self.folder_overlay.setStyleSheet(
+            f"#folderOverlay {{ background-color: {bg}; border-radius: 6px;"
+            " padding: 4px 8px; }" + tooltip_style())
+        self.folder_overlay.setTextFormat(Qt.TextFormat.RichText)
+        self.folder_overlay.setOpenExternalLinks(False)
+        self.folder_overlay.linkActivated.connect(self._open_dicom_folder)
+        self.folder_overlay.hide()
+        self._dicom_folder = ""
+
+    def set_dicom_folder(self, folder: str):
+        """Show `folder` over the image, or hide the overlay when empty."""
+        self._dicom_folder = folder or ""
+        self._update_folder_overlay()
+
+    def _open_dicom_folder(self, _href: str = ""):
+        """Open the series folder in the system file manager.
+
+        Note for a future Linux-focused pass: on GNOME the folder opens at once
+        but the pointer keeps a busy cursor for about 15 s. Nothing here blocks
+        (this call returns in under a millisecond); xdg-open hands the request to
+        an already running Nautilus, whose desktop entry sets StartupNotify=true,
+        so nobody ever completes the activation token and the shell only drops
+        its launch feedback on Mutter's startup timeout. Calling ShowFolders (or
+        ShowItems, which also selects the folder) on the D-Bus interface
+        org.freedesktop.FileManager1 avoids it entirely and is instant, with a
+        fallback to this call where that interface is missing, Windows included.
+        Left as is because most users are on Windows.
+        """
+        if not self._dicom_folder:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(self._dicom_folder))
+
+    def _update_folder_overlay(self):
+        """Refresh the overlay text, eliding a long path in the middle."""
+        if not hasattr(self, "folder_overlay"):
+            return
+        if not (self._dicom_folder and getattr(self, "_info_visible", True)):
+            self.folder_overlay.hide()
+            return
+        # Leave room for the image and for the information overlay facing it
+        available = max(120, self.viewer_stack.geometry().width() // 2)
+        metrics = QFontMetrics(self.folder_overlay.font())
+        text = metrics.elidedText(self._dicom_folder, Qt.TextElideMode.ElideMiddle,
+                                  available)
+        color = theme_colors()["accent"]
+        self.folder_overlay.setText(
+            f'<a href="open" style="color:{color}; text-decoration:none;">'
+            f"{html.escape(text)}</a>")
+        self.folder_overlay.setToolTip(
+            f"{self._dicom_folder}\n\nCliquer pour ouvrir le dossier")
+        self.folder_overlay.adjustSize()
+        self.folder_overlay.show()
+        self._update_folder_overlay_position()
+
+    def _create_info_overlay(self):
+        """Create the image information shown over the top-left of the image."""
+        self.info_overlay = QLabel(self)
+        is_light = get_app_config().theme == "light"
+        bg = "rgba(240, 240, 240, 200)" if is_light else "rgba(30, 30, 30, 200)"
+        fg = "#222222" if is_light else "#dddddd"
+        self.info_overlay.setObjectName("infoOverlay")
+        self.info_overlay.setStyleSheet(
+            f"#infoOverlay {{ background-color: {bg}; color: {fg}; border-radius: 6px;"
+            " padding: 4px 8px; }" + tooltip_style())
+        self.info_overlay.setTextFormat(Qt.TextFormat.PlainText)
+        self.info_overlay.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_overlay.hide()
+        self._image_info = ""
+        self._info_visible = True
+
+    def set_image_info(self, text: str):
+        """Show `text` over the image, or hide the overlay when empty."""
+        self._image_info = text or ""
+        self._update_info_overlay()
+
+    def _on_info_toggle(self, checked: bool):
+        """Show or hide the information overlays (image details and folder)."""
+        self._info_visible = checked
+        self._update_info_overlay()
+        self._update_folder_overlay()
+
+    def _toggle_info_overlays(self):
+        """Toggle the information overlays (keyboard shortcut)."""
+        self.toggle_info.toggle()
+
+    def _update_info_overlay(self):
+        """Refresh and position the top-left information overlay."""
+        if not hasattr(self, "info_overlay"):
+            return
+        if not (self._image_info and self._info_visible):
+            self.info_overlay.hide()
+            return
+        self.info_overlay.setText(self._image_info)
+        self.info_overlay.adjustSize()
+        self.info_overlay.show()
+        self._update_info_overlay_position()
+
+    def _update_info_overlay_position(self):
+        """Position the information overlay in the top-left corner of the viewer."""
+        if not (hasattr(self, "info_overlay") and hasattr(self, "viewer_stack")):
+            return
+        stack_geo = self.viewer_stack.geometry()
+        margin = 15
+        self.info_overlay.move(stack_geo.x() + margin, stack_geo.y() + margin)
+        self.info_overlay.raise_()
+
+    def _update_folder_overlay_position(self):
+        """Position the folder overlay in the top-right corner of the viewer."""
+        if not (hasattr(self, "folder_overlay") and hasattr(self, "viewer_stack")):
+            return
+        stack_geo = self.viewer_stack.geometry()
+        margin = 15
+        x = stack_geo.x() + stack_geo.width() - self.folder_overlay.width() - margin
+        y = stack_geo.y() + margin
+        self.folder_overlay.move(max(stack_geo.x(), x), y)
+        self.folder_overlay.raise_()
+
     def resizeEvent(self, event):
-        """Handle resize to reposition ROI overlay."""
+        """Handle resize to reposition the overlays."""
         super().resizeEvent(event)
         self._update_roi_overlay_position()
+        self._update_folder_overlay()
+        self._update_info_overlay_position()
 
     def showEvent(self, event):
-        """Handle show event to position overlay."""
+        """Handle show event to position overlays."""
         super().showEvent(event)
         QTimer.singleShot(0, self._update_roi_overlay_position)
+        QTimer.singleShot(0, self._update_folder_overlay)
+        QTimer.singleShot(0, self._update_info_overlay)
 
     def _update_roi_overlay_position(self):
         """Position the ROI overlay in bottom-right corner of viewer."""

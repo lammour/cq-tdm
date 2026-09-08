@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QShortcut, QKeySequence
+from PySide6.QtGui import QShortcut, QKeySequence, QFont
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -56,45 +56,20 @@ from ..core import (
 
 # Report imports - deferred via lazy __init__.py (reportlab)
 from ..reports import generate_pdf_report, generate_report_filename, ArtifactInspectionResult
+from .theme import theme_colors, primary_button_style
 
 
-def _theme_colors() -> dict:
-    """Return color dict based on current theme setting."""
-    is_light = get_app_config().theme == "light"
-    if is_light:
-        return {
-            "bg": "#ffffff",
-            "text": "#222222",
-            "text_secondary": "#555555",
-            "border": "#cccccc",
-            "section_title": "#1565c0",
-            "section_border": "#1565c0",
-            "th": "#666666",
-            "td": "#222222",
-            "roi_header_bg": "#e0e0e0",
-            "pending": "#999999",
-            "warning_bg": "#fff3e0",
-            "warning_border": "#ff9800",
-            "warning_title": "#e65100",
-            "warning_text": "#bf360c",
-        }
-    else:
-        return {
-            "bg": "#2b2b2b",
-            "text": "#e0e0e0",
-            "text_secondary": "#aaaaaa",
-            "border": "#444444",
-            "section_title": "#4fc3f7",
-            "section_border": "#4fc3f7",
-            "th": "#aaaaaa",
-            "td": "#ffffff",
-            "roi_header_bg": "#333333",
-            "pending": "#888888",
-            "warning_bg": "#4a3000",
-            "warning_border": "#ff9800",
-            "warning_title": "#ff9800",
-            "warning_text": "#ffcc80",
-        }
+# Selector entry and button labels for the "no installation selected" states
+NO_INSTALL_LABEL = "Aucune installation sélectionnée"   # no series loaded yet
+UNKNOWN_INSTALL_LABEL = "Installation inconnue"         # series loaded, not recognised
+NEW_INSTALL_LABEL = "Nouvelle installation"
+EDIT_INSTALL_LABEL = "Modifier…"
+
+
+# The theme palette lives in gui/theme.py so the image viewer shares it
+_theme_colors = theme_colors
+
+
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 
@@ -984,21 +959,23 @@ class MainWindow(QMainWindow):
         device_selector_layout = QHBoxLayout()
         device_selector_layout.setContentsMargins(0, 0, 0, 0)
         self._device_combo = QComboBox()
-        self._device_combo.addItem("-- Nouvelle installation --", None)
+        self._device_combo.addItem(NO_INSTALL_LABEL, None)
         self._refresh_device_combo()
         self._device_combo.currentIndexChanged.connect(self._on_device_selected)
         device_selector_layout.addWidget(self._device_combo, 1)
 
         # The installation form lives in a dialog, opened from here
-        self._btn_edit_device = QPushButton("Modifier…")
-        self._btn_edit_device.setToolTip("Renseigner l'installation et ses valeurs de référence")
+        self._btn_edit_device = QPushButton(EDIT_INSTALL_LABEL)
         self._btn_edit_device.clicked.connect(self._edit_installation)
+        self._update_install_selector()
         device_selector_layout.addWidget(self._btn_edit_device)
 
         right_layout.addLayout(device_selector_layout)
 
         self._install_summary = QLabel()
         self._install_summary.setWordWrap(True)
+        self._install_summary.setOpenExternalLinks(False)
+        self._install_summary.linkActivated.connect(self._on_install_summary_link)
         self._install_summary.setStyleSheet("color: #888; font-size: 11px; margin-left: 2px;")
         right_layout.addWidget(self._install_summary)
 
@@ -1069,20 +1046,29 @@ class MainWindow(QMainWindow):
         device_form_layout.addWidget(QLabel("Fréq. SPB réf. :"), 8, 0)
         device_form_layout.addWidget(self._edit_ref_nps_freq, 8, 1)
 
+        # First control: the measured values are what later controls compare to
+        self._btn_ref_from_current = QPushButton("Définir les valeurs actuelles comme références")
+        self._btn_ref_from_current.setToolTip(
+            "Reprendre le bruit et la fréquence SPB de l'analyse en cours "
+            "comme valeurs de référence de cette installation")
+        self._btn_ref_from_current.clicked.connect(self._set_current_as_reference)
+        device_form_layout.addWidget(self._btn_ref_from_current, 9, 0, 1, 2)
+        self._update_reference_button_state()
+
         # Slice selection (read-only here: it is chosen in the main window, saved with the device)
         slices_label = QLabel("Coupes analysées :")
         slices_label.setStyleSheet("font-style: italic; color: #888; margin-top: 4px;")
-        device_form_layout.addWidget(slices_label, 9, 0, 1, 2)
-        device_form_layout.addWidget(QLabel("Coupe UH :"), 10, 0)
+        device_form_layout.addWidget(slices_label, 10, 0, 1, 2)
+        device_form_layout.addWidget(QLabel("Coupe UH :"), 11, 0)
         self._label_dialog_hu_slice = QLabel("—")
-        device_form_layout.addWidget(self._label_dialog_hu_slice, 10, 1)
-        device_form_layout.addWidget(QLabel("Coupes SPB :"), 11, 0)
+        device_form_layout.addWidget(self._label_dialog_hu_slice, 11, 1)
+        device_form_layout.addWidget(QLabel("Coupes SPB :"), 12, 0)
         self._label_dialog_nps_range = QLabel("—")
-        device_form_layout.addWidget(self._label_dialog_nps_range, 11, 1)
+        device_form_layout.addWidget(self._label_dialog_nps_range, 12, 1)
         self._label_dialog_slices_note = QLabel()
         self._label_dialog_slices_note.setWordWrap(True)
         self._label_dialog_slices_note.setStyleSheet("font-size: 11px;")
-        device_form_layout.addWidget(self._label_dialog_slices_note, 12, 0, 1, 2)
+        device_form_layout.addWidget(self._label_dialog_slices_note, 13, 0, 1, 2)
 
         # Installation dialog (persistent: the QLineEdits above must outlive each opening
         # because the results view, PDF export and auto-detection read them directly)
@@ -1196,6 +1182,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("R"), self, self._reset_view)
         QShortcut(QKeySequence("U"), self, self._toggle_water_rois)
         QShortcut(QKeySequence("S"), self, self._toggle_nps_rois)
+        QShortcut(QKeySequence("I"), self, self._toggle_info_overlays)
 
         # Analysis
         QShortcut(QKeySequence("A"), self, self._inspect_artifacts)
@@ -1265,6 +1252,10 @@ class MainWindow(QMainWindow):
         """Toggle NPS ROI visibility."""
         self.image_viewer._toggle_nps_rois()
 
+    def _toggle_info_overlays(self):
+        """Toggle the image information and folder path shown over the image."""
+        self.image_viewer._toggle_info_overlays()
+
     def _show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
         shortcuts = """
@@ -1283,6 +1274,7 @@ class MainWindow(QMainWindow):
 <tr><td><b>R</b></td><td>Réinitialiser la vue (zoom 100%)</td></tr>
 <tr><td><b>U</b></td><td>Afficher/Masquer ROIs UH (jaune)</td></tr>
 <tr><td><b>S</b></td><td>Afficher/Masquer ROIs SPB (vert)</td></tr>
+<tr><td><b>I</b></td><td>Afficher/Masquer les informations sur l'image</td></tr>
 </table>
 
 <h3>Analyse</h3>
@@ -1373,8 +1365,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         patient_name = img.patient_name or "N/A"
         patient_id = img.patient_id or "N/A"
 
-        # Date and time
-        datetime_str = self._format_datetime(img.study_date, img.acquisition_time or img.study_time)
+        # Date and time; the acquisition date falls back through SeriesDate and
+        # friends, so ANSM test images with a blank StudyDate are not shown "N/A"
+        datetime_str = self._format_datetime(
+            img.acquisition_date, img.acquisition_time or img.study_time)
 
         # kVp and mA with range detection for series
         kvp_str, ma_str = self._get_kvp_ma_info()
@@ -1390,6 +1384,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             "",
             f"kVp : {kvp_str}",
             f"mA : {ma_str}",
+            f"Temps de rotation : {self._get_rotation_time_str()}",
+            f"Pitch : {self._get_pitch_str()}",
+            f"Charge : {format_fr(img.mas, 0)} mAs" if img.mas else "Charge : N/A",
+            f"IDSV (CTDIvol) : {self._get_ctdi_str()}",
             f"Filtre : {img.convolution_kernel or 'N/A'}",
             "",
             f"Matrice : {img.columns} × {img.rows} px",
@@ -1398,11 +1396,58 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             f"FOV : {img.fov:.0f} mm" if img.fov else "FOV : N/A",
         ]
 
+        exposure_str = self._get_exposure_time_str()
+        if exposure_str:
+            # Only shown when it is not simply the rotation time again
+            info_lines.insert(info_lines.index(f"Filtre : {img.convolution_kernel or 'N/A'}"),
+                              f"Temps d'exposition total : {exposure_str}")
+
         if self._current_series:
             info_lines.append("")
             info_lines.append(f"Nombre de coupes : {self._current_series.num_images}")
 
         return "\n".join(info_lines)
+
+    def _get_image_overlay_text(self) -> str:
+        """Short form of the image information, for the overlay on the image.
+
+        A subset of `_get_image_info_text`: what tells one acquisition from
+        another at a glance. Patient name and IPP stay in the dialog, so an
+        identity is never left standing on screen or caught in a screenshot.
+        """
+        if self._current_image is None:
+            return ""
+        img = self._current_image
+        kvp_str, ma_str = self._get_kvp_ma_info()
+        # "(toutes coupes)" is noise once the values are on one compact line;
+        # the modulation range, which does matter, is kept
+        kvp_str = kvp_str.replace(" (toutes coupes)", "")
+        ma_str = ma_str.replace(" (toutes coupes)", "")
+        # Same date as the control itself: ANSM test images have a blank StudyDate
+        date_str = self._format_datetime(
+            img.acquisition_date, img.acquisition_time or img.study_time)
+        # Some ANSM test images carry no date tag at all: drop the line rather
+        # than open the overlay with "N/A"
+        if date_str.startswith("N/A"):
+            date_str = date_str[3:].strip()
+        lines = [
+            date_str,
+            f"{img.manufacturer or ''} {img.model_name or ''}".strip() or "Scanner N/A",
+            img.series_description or "Protocole N/A",
+            f"{kvp_str} kV · {ma_str} mA · {self._get_rotation_time_str()}/tour"
+            + (f" · {format_fr(img.mas, 0)} mAs" if img.mas else ""),
+            " · ".join(part for part in (
+                f"Pitch {format_fr(img.pitch, 3)}" if img.pitch > 0 else "",
+                f"IDSV {self._get_ctdi_str()}" if img.ctdi_vol > 0 else "",
+            ) if part),
+            f"{img.convolution_kernel or 'Filtre N/A'} · {img.columns} × {img.rows} px"
+            f" · {format_fr(img.pixel_size_mm, 3)} mm/px",
+            f"Coupe {format_fr(img.slice_thickness, 1)} mm"
+            + (f" · FOV {img.fov:.0f} mm" if img.fov else ""),
+        ]
+        if self._current_series:
+            lines[-1] += f" · {self._current_series.num_images} coupes"
+        return "\n".join(line for line in lines if line)
 
     def _restore_saved_values(self):
         """Restore all saved values from the current device."""
@@ -1456,18 +1501,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         # Update save button - enabled only when there are changes
         self._btn_save_device.setEnabled(is_modified)
 
-        if is_modified:
-            # Glowing aura effect using QGraphicsDropShadowEffect
-            from PySide6.QtWidgets import QGraphicsDropShadowEffect
-            from PySide6.QtGui import QColor
-            glow = QGraphicsDropShadowEffect(self._btn_save_device)
-            glow.setBlurRadius(15)
-            glow.setOffset(0, 0)
-            glow.setColor(QColor(230, 160, 48, 180))  # Amber glow
-            self._btn_save_device.setGraphicsEffect(glow)
-        else:
-            # Remove glow effect
-            self._btn_save_device.setGraphicsEffect(None)
+        # Pending changes make "Enregistrer" the action to take, marked with the
+        # same accent fill as the other primary buttons rather than a separate
+        # amber glow, so one colour means one thing across the application
+        self._btn_save_device.setStyleSheet(primary_button_style() if is_modified else "")
 
     def _check_any_value_modified(self) -> bool:
         """Check if any saved value has been modified or if this is a new device."""
@@ -1559,6 +1596,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
             self._current_series = series
             self._current_folder = str(Path(folder_path).resolve())
+            # Show where the series came from, over the top-right of the image
+            self.image_viewer.set_dicom_folder(self._current_folder)
             # Reset all results so a failed analysis on the new series cannot leave
             # the previous series' numbers in the panel or in the PDF
             self._current_results = None
@@ -1586,6 +1625,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
 
             # Display middle image and fit to view
             self.image_viewer.set_image(self._current_image, fit_to_view=True)
+            self.image_viewer.set_image_info(self._get_image_overlay_text())
             self._update_debug_overlay()
 
             # Try to auto-detect device from database
@@ -1609,9 +1649,54 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         if self._current_series and 0 <= index < self._current_series.num_images:
             self._current_image = self._current_series.images[index]
             self.image_viewer.set_image(self._current_image)
+            # Slice-dependent fields (time, thickness) follow the displayed image
+            self.image_viewer.set_image_info(self._get_image_overlay_text())
             # Update debug overlay if enabled
             if self._debug_mode:
                 self._update_debug_overlay()
+
+    def _get_rotation_time_str(self) -> str:
+        """Gantry rotation time of the current image, or "N/A"."""
+        if self._current_image is None:
+            return "N/A"
+        rotation = self._current_image.rotation_time
+        return f"{format_fr(rotation, 2)} s" if rotation > 0 else "N/A"
+
+    def _get_exposure_time_str(self) -> str:
+        """Exposure time, only when it says something the rotation time does not.
+
+        The two agree on most scanners. When they differ the tag holds the
+        duration of the whole acquisition, which is worth showing separately.
+        """
+        if self._current_image is None:
+            return ""
+        img = self._current_image
+        if img.exposure_time <= 0:
+            return ""
+        seconds = img.exposure_time / 1000.0
+        rotation = img.rotation_time
+        if rotation > 0 and abs(seconds - rotation) < 0.005:
+            return ""
+        return f"{format_fr(seconds, 2)} s"
+
+    def _get_pitch_str(self) -> str:
+        """Pitch of the current image; axial acquisitions simply have none."""
+        if self._current_image is None:
+            return "N/A"
+        img = self._current_image
+        if img.pitch > 0:
+            return format_fr(img.pitch, 3)
+        if img.acquisition_type.upper().startswith("SEQUENCE"):
+            return "acquisition séquentielle"
+        return "N/A"
+
+    def _get_ctdi_str(self) -> str:
+        """CTDIvol in mGy with its phantom, which the value cannot be read without."""
+        if self._current_image is None or self._current_image.ctdi_vol <= 0:
+            return "N/A"
+        img = self._current_image
+        phantom = f" ({img.ctdi_phantom})" if img.ctdi_phantom else ""
+        return f"{format_fr(img.ctdi_vol, 2)} mGy{phantom}"
 
     def _get_kvp_ma_info(self) -> tuple[str, str]:
         """Get kVp and mA info, detecting modulation across slices."""
@@ -1680,7 +1765,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             answer = QMessageBox.question(
                 self, "Installation non enregistrée",
                 "L'installation n'est pas enregistrée : le rapport PDF sera exporté mais le contrôle "
-                "ne sera pas ajouté à l'historique.\n\nEnregistrez d'abord l'installation via « Modifier… » "
+                f"ne sera pas ajouté à l'historique.\n\nEnregistrez d'abord l'installation via "
+                f"« {NEW_INSTALL_LABEL} » "
                 "pour conserver les résultats.\n\nExporter quand même ?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
@@ -2188,6 +2274,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         html = self._format_results_html()
         self.results_browser.setHtml(html)
         self.history_panel.set_current_run(self._current_run_for_history())
+        # A fresh analysis unlocks "définir les valeurs actuelles comme références"
+        self._update_install_summary()
 
     # ---- results history ----
 
@@ -2259,31 +2347,83 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         self.history_panel.select_run(self._current_device.find_run(run.run_id))
         return " · contrôle remplacé dans l'historique" if replaced else " · contrôle ajouté à l'historique"
 
-    def _apply_reference_from_history(self, run: QCRun):
-        """Make a past run's noise and SPB frequency the device reference values."""
-        nps_text = f" et f SPB = {format_fr(run.nps_freq, 3)} c/mm" if run.nps_freq is not None else ""
+    def _confirm_and_set_references(self, noise: float, nps_freq: float | None,
+                                    source: str) -> bool:
+        """Ask, then make `noise`/`nps_freq` the reference values of the device.
+
+        `source` names where the values come from, for the question and the
+        status bar. Returns True when the values were applied.
+        """
+        nps_text = f" et f SPB = {format_fr(nps_freq, 3)} c/mm" if nps_freq is not None else ""
         answer = QMessageBox.question(
             self, "Valeurs de référence",
-            f"Définir σ = {format_fr(run.noise, 2)} HU{nps_text} (contrôle du {run.date_fr()}) "
+            f"Définir σ = {format_fr(noise, 2)} HU{nps_text} ({source}) "
             "comme valeurs de référence de cette installation ?")
         if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._edit_ref_noise.setText(format_fr(run.noise, 2))
-        if run.nps_freq is not None:
-            self._edit_ref_nps_freq.setText(format_fr(run.nps_freq, 3))
+            return False
+
+        self._edit_ref_noise.setText(format_fr(noise, 2))
+        if nps_freq is not None:
+            self._edit_ref_nps_freq.setText(format_fr(nps_freq, 3))
         if self._current_device is not None:
-            self._current_device.reference_noise = run.noise
-            self._current_device.reference_nps_freq = run.nps_freq
+            self._current_device.reference_noise = noise
+            # A missing SPB frequency leaves the recorded one alone: the field
+            # above is not cleared either, so clearing the device would make the
+            # two disagree
+            if nps_freq is not None:
+                self._current_device.reference_nps_freq = nps_freq
             try:
                 self._device_db.save_device(self._current_device)
             except OSError as e:
-                QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer les valeurs de référence :\n{e}")
-                return
+                QMessageBox.warning(self, "Valeurs de référence",
+                                    f"Impossible d'enregistrer les valeurs de référence :\n{e}")
+                return False
             self._saved_ref_noise = self._edit_ref_noise.text()
             self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
-            self._update_save_button_style()
-            self._update_install_summary()
-        self.statusbar.showMessage(f"Valeurs de référence définies depuis le contrôle du {run.date_fr()}", 5000)
+        self._update_save_button_style()
+        self._update_install_summary()
+        self.statusbar.showMessage(f"Valeurs de référence définies depuis {source}", 5000)
+        return True
+
+    def _apply_reference_from_history(self, run: QCRun):
+        """Make a past run's noise and SPB frequency the device reference values."""
+        self._confirm_and_set_references(run.noise, run.nps_freq,
+                                         f"contrôle du {run.date_fr()}")
+
+    def _on_install_summary_link(self, href: str):
+        """Handle the links embedded in the summary under the device selector."""
+        if href == "set-reference":
+            self._set_current_as_reference()
+
+    def _set_current_as_reference(self):
+        """Make the values just measured the reference values.
+
+        The common case for a first control: with no reference recorded there is
+        nothing to compare against, and the measured values are what later
+        controls must be judged from.
+        """
+        if self._current_results is None:
+            QMessageBox.information(
+                self, "Valeurs de référence",
+                "Aucune analyse effectuée : lancez l'analyse avant de définir "
+                "les valeurs actuelles comme références.")
+            return
+        nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
+        if self._confirm_and_set_references(self._current_results.noise, nps_freq,
+                                            "analyse en cours"):
+            self._update_reference_button_state()
+
+    def _update_reference_button_state(self):
+        """Enable and highlight "valeurs actuelles" when it is the thing to do."""
+        if not hasattr(self, "_btn_ref_from_current"):
+            return
+        has_analysis = self._current_results is not None
+        self._btn_ref_from_current.setEnabled(has_analysis)
+        no_reference = not (self._edit_ref_noise.text().strip()
+                            or self._edit_ref_nps_freq.text().strip())
+        # First control: no reference yet, so this is the action to take
+        self._btn_ref_from_current.setStyleSheet(
+            primary_button_style() if has_analysis and no_reference else "")
 
     def _delete_history_run(self, run: QCRun):
         if self._current_device is None:
@@ -2766,23 +2906,44 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
         # Clear and rebuild
         self._device_combo.clear()
-        self._device_combo.addItem("-- Nouvel équipement --", None)
+        self._device_combo.addItem(self._placeholder_install_label(), None)
+
+        # Saved installations stay upright even when the placeholder, and with
+        # it the closed combo, is drawn in italic
+        upright = QFont(self._device_combo.font())
+        upright.setItalic(False)
 
         devices = self._device_db.get_all_devices()
         selected_index = 0
         for i, device in enumerate(devices):
             self._device_combo.addItem(device.display_name(), device.device_id)
+            self._device_combo.setItemData(i + 1, upright, Qt.ItemDataRole.FontRole)
             if current_id and device.device_id == current_id:
-                selected_index = i + 1  # +1 for the "Nouvel équipement" item
+                selected_index = i + 1  # +1 for the placeholder item
 
         self._device_combo.setCurrentIndex(selected_index)
         self._device_combo.blockSignals(False)
+        self._update_install_selector()
+
+    def _show_device_hu_slice(self, device: DeviceConfig | None):
+        """Display the HU slice saved for `device`, if there is one to show.
+
+        The HU slice is the one an installation is controlled on, so it is a
+        better landing point than the middle of the series, both when a scanner
+        is recognised on load and when another installation is picked by hand.
+        """
+        if device is None or device.hu_slice_index is None or self._current_series is None:
+            return
+        hu_slice = self.image_viewer.get_hu_slice_index()
+        if 0 <= hu_slice < self._current_series.num_images:
+            self.image_viewer.set_current_slice(hu_slice)
+            self._on_slice_changed(hu_slice)
 
     def _on_device_selected(self, index: int):
         """Handle device selection from dropdown."""
         device_id = self._device_combo.itemData(index)
         if device_id is None:
-            # "Nouvel équipement" selected - reset to defaults
+            # Placeholder entry selected - reset to defaults
             self._current_device = None
             self._load_device_config(None)
         else:
@@ -2790,10 +2951,14 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             if device:
                 self._current_device = device
                 self._load_device_config(device)
+                self._show_device_hu_slice(device)
+        self._update_install_summary()
 
     def _edit_installation(self):
         """Open the installation form."""
         self._update_dialog_slice_labels()
+        # Without this, "Enregistrer" keeps the enabled state of the last visit
+        self._update_save_button_style()
         self._install_dialog.exec()
         self._update_install_summary()
 
@@ -2851,8 +3016,64 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         self._label_dialog_hu_slice.setText(hu_text)
         self._label_dialog_nps_range.setText(nps_text)
 
+    def _placeholder_install_label(self) -> str:
+        """Text of the first combo entry, which stands for "no installation"."""
+        if getattr(self, "_current_image", None) is None:
+            return NO_INSTALL_LABEL
+        return UNKNOWN_INSTALL_LABEL
+
+    def _update_install_selector(self):
+        """Label and highlight the selector according to the current state.
+
+        Three states are distinguished:
+        - no series loaded: "Aucune installation sélectionnée", plain button;
+        - series loaded but not matched to a saved installation:
+          "Installation inconnue", highlighted "Nouvelle installation" button,
+          because recording one is the next thing to do;
+        - installation selected: its name, plain "Modifier…" button.
+
+        The placeholder is drawn in italic so it does not read as the name of a
+        saved installation.
+        """
+        if not hasattr(self, "_device_combo"):
+            return
+        placeholder = self._current_device is None
+
+        if placeholder:
+            label = self._placeholder_install_label()
+            self._device_combo.setItemText(0, label)
+            italic = QFont(self._device_combo.font())
+            italic.setItalic(True)
+            self._device_combo.setItemData(0, italic, Qt.ItemDataRole.FontRole)
+
+        # The closed combo ignores the item font role, so the widget font
+        # carries the italic; saved entries get an upright font of their own.
+        font = QFont(self._device_combo.font())
+        font.setItalic(placeholder)
+        self._device_combo.setFont(font)
+
+        if not hasattr(self, "_btn_edit_device"):
+            return
+        if not placeholder:
+            self._btn_edit_device.setText(EDIT_INSTALL_LABEL)
+            self._btn_edit_device.setToolTip(
+                "Renseigner l'installation et ses valeurs de référence")
+            self._btn_edit_device.setStyleSheet("")
+            return
+
+        self._btn_edit_device.setText(NEW_INSTALL_LABEL)
+        self._btn_edit_device.setToolTip(
+            "Enregistrer cette installation et ses valeurs de référence")
+        if self._current_image is None:
+            # Nothing to record yet: keep the button quiet
+            self._btn_edit_device.setStyleSheet("")
+            return
+        self._btn_edit_device.setStyleSheet(primary_button_style())
+
     def _update_install_summary(self):
         """Refresh the one-glance summary shown under the device selector."""
+        self._update_install_selector()
+        self._update_reference_button_state()
         if not hasattr(self, "_install_summary"):
             return
         c = _theme_colors()
@@ -2875,9 +3096,16 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             refs.append(f"σ réf. {format_fr(ref_noise, 2)} HU")
         if ref_nps is not None:
             refs.append(f"f SPB réf. {format_fr(ref_nps, 3)} c/mm")
-        ref_line = " · ".join(refs) if refs else (
-            f'<span style="color:{c["warning_border"]};">Valeurs de référence non renseignées</span>'
-        )
+        if refs:
+            ref_line = " · ".join(refs)
+        elif self._current_results is not None:
+            # Offer the one-click first-control shortcut where the gap is noticed
+            ref_line = (f'<span style="color:{c["warning_border"]};">Valeurs de référence non '
+                        f'renseignées</span> — <a href="set-reference" style="color:{c["accent"]};">'
+                        "définir les valeurs actuelles comme références</a>")
+        else:
+            ref_line = f'<span style="color:{c["warning_border"]};">Valeurs de référence non renseignées</span>'
+
         modified = " · <i>modifications non enregistrées</i>" if self._check_any_value_modified() else ""
         current, saved_slices, differs = self._slice_selection_state()
         if differs:
@@ -3132,6 +3360,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._current_device = device
             self._load_device_config(device)
             self._refresh_device_combo()
+            self._update_install_summary()
+            self._show_device_hu_slice(device)
             self.statusbar.showMessage(
                 f"Installation reconnue : {device.display_name()}"
             )
@@ -3145,7 +3375,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             device_name = f"{img.manufacturer or ''} {img.model_name or ''}".strip()
             if device_name:
                 self._edit_device_name.setText(device_name)
-            # Set combo to "Nouvel équipement"
+            # Set combo to "Installation inconnue"
             self._device_combo.blockSignals(True)
             self._device_combo.setCurrentIndex(0)
             self._device_combo.blockSignals(False)

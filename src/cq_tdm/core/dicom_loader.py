@@ -44,8 +44,13 @@ class DicomImage:
     # Acquisition parameters
     kvp: float = 0.0
     tube_current: float = 0.0  # X-ray tube current (mA)
-    exposure_time: float = 0.0  # Exposure time (ms)
+    exposure_time: float = 0.0  # Exposure time (ms), DICOM (0018,1150)
+    revolution_time: float = 0.0  # Gantry rotation time (s), DICOM (0018,9305)
     exposure: float = 0.0  # Exposure (mAs), DICOM (0018,1152)
+    pitch: float = 0.0  # Spiral pitch factor, DICOM (0018,9311); 0 if axial
+    ctdi_vol: float = 0.0  # CTDIvol / IDSV in mGy, DICOM (0018,9345)
+    ctdi_phantom: str = ""  # CTDI phantom, DICOM (0018,9346) code meaning
+    acquisition_type: str = ""  # SPIRAL, SEQUENCED…, DICOM (0018,9302)
     convolution_kernel: str = ""
     focal_spots: str = ""
     study_time: str = ""
@@ -73,12 +78,33 @@ class DicomImage:
         return self.pixel_spacing[0]
 
     @property
+    def rotation_time(self) -> float:
+        """Gantry rotation time in seconds; 0 when unknown.
+
+        RevolutionTime is the reliable source. ExposureTime is only a fallback:
+        on most scanners it holds the rotation time in ms, but on some it holds
+        the whole acquisition instead (16 758 ms for a spiral whose rotation
+        time is 1 s), so it is used only when RevolutionTime is absent.
+        """
+        if self.revolution_time > 0:
+            return self.revolution_time
+        if self.exposure_time > 0:
+            return self.exposure_time / 1000.0
+        return 0.0
+
+    @property
     def mas(self) -> float:
-        """Tube load in mAs: the Exposure tag, else current × time; 0 if unknown."""
+        """Tube load in mAs: the Exposure tag, else current × rotation time.
+
+        Returns 0 when unknown. The fallback uses the rotation time rather than
+        ExposureTime, which on a spiral can be the duration of the whole
+        acquisition and would inflate the load by more than a decade.
+        """
         if self.exposure > 0:
             return self.exposure
-        if self.tube_current > 0 and self.exposure_time > 0:
-            return self.tube_current * self.exposure_time / 1000.0
+        rotation = self.rotation_time
+        if self.tube_current > 0 and rotation > 0:
+            return self.tube_current * rotation
         return 0.0
 
 
@@ -122,6 +148,24 @@ def _get_attr(ds: Dataset, attr: str, default=None):
         return value
     except Exception:
         return default
+
+
+def _ctdi_phantom(ds: Dataset) -> str:
+    """Short name of the CTDI phantom, from the code sequence (0018,9346).
+
+    The phantom decides how CTDIvol reads: the same mGy on the 16 cm head
+    phantom and on the 32 cm body phantom are not the same exposure.
+    """
+    seq = _get_attr(ds, 'CTDIPhantomTypeCodeSequence')
+    if not seq:
+        return ""
+    meaning = str(_get_attr(seq[0], 'CodeMeaning', '') or '')
+    lowered = meaning.lower()
+    if 'head' in lowered:
+        return "tête 16 cm"
+    if 'body' in lowered:
+        return "corps 32 cm"
+    return meaning
 
 
 _DATE_TAGS = ('StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate', 'InstanceCreationDate')
@@ -239,6 +283,11 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         kvp=float(_get_attr(ds, 'KVP', 0.0)),
         tube_current=float(_get_attr(ds, 'XRayTubeCurrent', 0.0)),
         exposure_time=float(_get_attr(ds, 'ExposureTime', 0.0)),
+        revolution_time=float(_get_attr(ds, 'RevolutionTime', 0.0)),
+        pitch=float(_get_attr(ds, 'SpiralPitchFactor', 0.0)),
+        ctdi_vol=float(_get_attr(ds, 'CTDIvol', 0.0)),
+        ctdi_phantom=_ctdi_phantom(ds),
+        acquisition_type=str(_get_attr(ds, 'AcquisitionType', '') or ''),
         exposure=float(_get_attr(ds, 'Exposure', 0.0)),
         convolution_kernel=convolution_kernel,
         focal_spots=focal_spots,
