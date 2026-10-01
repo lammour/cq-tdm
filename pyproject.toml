@@ -1,7 +1,7 @@
 [project]
 name = "cq-tdm"
 dynamic = ["version"]
-description = "CT Scanner Internal Quality Control Software"
+description = "Contrôle de qualité interne des tomodensitomètres (décision ANSM du 18/12/2025)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "CeCILL-2.1"}
@@ -9,13 +9,15 @@ authors = [
     {name = "Luis"}
 ]
 
+# Upper bounds on the next major versions: an incompatible release must not
+# reach users through "pip install cq-tdm" before it has been tested here
 dependencies = [
-    "pydicom>=2.4.0",
-    "numpy>=1.24.0",
-    "scipy>=1.11.0",
-    "PySide6-Essentials>=6.6.0",
-    "reportlab>=4.0.0",
-    "matplotlib>=3.8.0",
+    "pydicom>=2.4.0,<4",
+    "numpy>=1.24.0,<3",
+    "scipy>=1.11.0,<2",
+    "PySide6-Essentials>=6.6.0,<7",
+    "reportlab>=4.0.0,<6",
+    "matplotlib>=3.8.0,<4",
     "Pillow>=9.0.0",
 ]
 

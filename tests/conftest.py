@@ -44,7 +44,12 @@ def no_unanswered_dialogs(monkeypatch):
     A test that expects a dialog replaces the call itself (its own monkeypatch
     takes precedence).
     """
-    from PySide6.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox
+    try:
+        from PySide6.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox
+    except ImportError:
+        # No Qt widgets on this machine (the NPS validation workflow installs
+        # no display libraries): nothing can open a dialog either
+        return
 
     def refuse(name):
         def raiser(*args, **kwargs):

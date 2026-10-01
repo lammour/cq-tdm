@@ -14,6 +14,7 @@ import numpy as np
 
 from .dicom_loader import DicomImage, DicomSeries, detect_phantom, detect_phantom_center
 from .roi_geometry import ROIGeometry
+from .utils import format_fr
 
 # numpy 2.0 renamed trapz -> trapezoid; scipy.integrate.trapezoid gives identical
 # results but pulls in scipy.linalg/sparse/optimize, which are excluded from the
@@ -616,13 +617,15 @@ def analyze_nps(
                 z_score = abs(roi_mean - overall_mean) / overall_std_of_means
                 if z_score > 3 and abs(roi_mean - overall_mean) > 2.0:
                     warnings_for_roi.append(
-                        f"moyenne atypique ({roi_mean:.1f} UH vs {overall_mean:.1f} UH attendu)"
+                        f"moyenne atypique ({format_fr(roi_mean, 1)} UH pour "
+                        f"{format_fr(overall_mean, 1)} UH attendu)"
                     )
 
             # Check if std is unusually high (>2x median std)
             if median_std > 0 and roi_std > 2 * median_std:
                 warnings_for_roi.append(
-                    f"écart-type élevé ({roi_std:.1f} UH vs {median_std:.1f} UH médian)"
+                    f"écart-type élevé ({format_fr(roi_std, 1)} UH pour "
+                    f"{format_fr(median_std, 1)} UH en médiane)"
                 )
 
             if warnings_for_roi:
@@ -631,7 +634,7 @@ def analyze_nps(
                     slice_index=slice_idx,
                     mean_hu=roi_mean,
                     std_hu=roi_std,
-                    message=f"ROI {roi_idx + 1}, coupe {slice_idx + 1}: {'; '.join(warnings_for_roi)}"
+                    message=f"ROI {roi_idx + 1}, coupe {slice_idx + 1} : {' ; '.join(warnings_for_roi)}"
                 ))
 
     # Noise: mean of the standard deviations of the ROIs (before detrending)

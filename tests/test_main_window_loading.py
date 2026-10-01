@@ -241,3 +241,28 @@ def test_export_records_the_control_with_its_date_and_type(window, tmp_path, mon
     assert device.roi_geometry is not None and device.roi_geometry.frozen_date == "2026-09-15"
     # The name is offered again next time
     assert mw.get_app_config().last_performed_by == "A. Martin"
+
+
+def test_reference_from_an_undated_control_asks_its_date_first(window, tmp_path, monkeypatch, shown):
+    folder = phantom_series(tmp_path / "dicom", study_date="")
+    assert window._load_dicom_folder(str(folder)) is True
+    analyse(window)
+    dialog = mw.DeviceManagerDialog(window._device_db, window, current_image=window._current_image)
+    dialog._create_from_image()
+    window._after_device_manager(dialog)
+    monkeypatch.setattr(mw, "ask", lambda *a, **k: True)
+
+    # Date not given: no reference is defined
+    monkeypatch.setattr(window, "_ask_control_date", lambda: False)
+    window._set_current_as_reference()
+    assert window._current_device.reference_noise is None
+
+    def type_date():
+        window._manual_control_date = "2026-09-15"
+        return True
+
+    monkeypatch.setattr(window, "_ask_control_date", type_date)
+    window._set_current_as_reference()
+    device = window._current_device
+    assert device.reference_noise == pytest.approx(window._nps_results.noise)
+    assert device.roi_geometry.frozen_date == "2026-09-15"

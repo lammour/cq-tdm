@@ -11,6 +11,10 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
 ## Fonctionnalités
 
 - **Chargement d'images DICOM** : Charger et visualiser des séries DICOM CT
+  - Seules les coupes axiales de tomodensitométrie sont analysées, qu'elles viennent d'une acquisition hélicoïdale ou séquentielle : topogramme, rapport de dose et reconstructions non axiales sont écartés
+  - Si le dossier contient plusieurs séries, le logiciel demande laquelle analyser ; les séries ne sont jamais mélangées
+  - Une série sans taille de pixel (champ DICOM `PixelSpacing`), compressée avec perte ou dont les fichiers sont illisibles est refusée, avec la raison ; les fichiers inutilisables d'une série sont signalés
+  - Si le fantôme n'est pas détecté sur la coupe analysée, le logiciel le signale à l'écran, avant l'export et dans le rapport
 - **Analyse du fantôme d'eau** :
   - Nombre CT de l'eau
   - Uniformité
@@ -25,6 +29,9 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Tailles et positions des ROI figées par installation lors du contrôle de référence et réutilisées à l'identique aux contrôles suivants
   - Export des ROI (JSON, compatible avec IQMetrix-CT)
 - **Génération de rapports PDF** avec statuts de conformité et valeurs de référence ; section « Historique des contrôles » optionnelle (« Configuration > Rapports… », désactivée par défaut)
+  - Tableau « Résumé des tests » en première page : valeur mesurée, valeur de référence, critère d'acceptabilité et conformité de chaque test
+  - Type de contrôle (trimestriel, semestriel, avant mise en service, après intervention), coupes utilisées, ROI repérées sur les images, bloc de validation « Réalisé par / Validé par », version du logiciel et numéro de page sur chaque page
+  - La date du contrôle est celle des images. Si elles n'en contiennent aucune, elle est demandée à l'export et le rapport indique qu'elle a été saisie manuellement ; elle n'est jamais remplacée par la date du jour
   - Un contrôle n'est déclaré conforme que si tous les tests ont été jugés : sans inspection des artéfacts, sans valeurs de référence ou sans SPB, le rapport porte la mention « Contrôle incomplet » et le logiciel le signale avant l'export
   - Le rapport reprend les éléments demandés dans le registre des opérations (décision ANSM, point 3.2.2) : paramètres du protocole de contrôle (kV, mAs, temps de rotation, mode et pitch, collimation, foyer, filtre, épaisseur, matrice, champ de vue, IDSV), identifiant et dossier des images DICOM archivées, position et taille de chaque ROI, fantôme utilisé, protocole clinique d'origine, algorithme de reconstruction, actions correctives
 - **Historique des résultats** :
@@ -34,12 +41,12 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Définition des valeurs de référence à partir d'un contrôle passé, export CSV, ouverture du rapport PDF associé
   - Saisie de la date et de la nature de l'action corrective réalisée après un contrôle
   - « Charger la série DICOM » : recharge les images d'un contrôle passé dans la visionneuse avec les coupes utilisées à l'époque ; si le dossier a été déplacé, il peut être localisé ou recherché dans un dossier d'archive, la série étant vérifiée par son identifiant DICOM
-- **Base de données des appareils** :
+- **Base de données des installations** :
   - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification, des informations du registre des opérations, des coupes de mesure et de la géométrie des ROI
   - Une seule fenêtre « Gestion des installations » pour créer, modifier et supprimer les installations, utilisable sans image chargée
-  - Détection automatique des appareils enregistrés
+  - Détection automatique des installations enregistrées ; une série anonymisée, qui n'identifie pas le scanner, est rattachée à son installation à la main
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
-  - L'historique des contrôles est stocké dans le même fichier que les appareils (`devices.json`)
+  - L'historique des contrôles est stocké dans le même fichier que les installations (`devices.json`)
 
 
 ## Cadre réglementaire
@@ -161,7 +168,7 @@ pip install -e .
 3. Choisir les coupes de mesure sous le curseur de coupe ; « Réinit. coupes » revient aux coupes enregistrées
 4. Cliquer sur « Nouvelle installation » ou « Modifier… » pour ouvrir la fenêtre des installations : créer l'installation depuis l'image chargée, renseigner ses informations, les éléments du registre des opérations et les valeurs de référence, puis « Enregistrer les modifications »
 5. Vérifier les artéfacts et ajouter une observation si nécessaire
-6. Cliquer sur « Enregistrer les résultats et exporter le PDF » : le rapport est généré et le contrôle est ajouté à l'historique de l'installation
+6. Cliquer sur « Enregistrer le contrôle et exporter le PDF » : indiquer le type de contrôle et, si besoin, le nom de la personne qui l'a réalisé et celui du physicien médical qui le valide ; le rapport est généré et le contrôle est ajouté à l'historique de l'installation
 7. Consulter l'onglet « Historique » pour suivre l'évolution des mesures d'un contrôle à l'autre
 
 ## Signaler un problème
@@ -170,5 +177,7 @@ En cas d'erreur inattendue, l'application affiche un message et enregistre le d�
 
 - Windows : `%LOCALAPPDATA%\cq_tdm\`
 - GNU/Linux : `~/.config/cq_tdm/`
+
+Le menu « Aide > Ouvrir le dossier du journal » ouvre ce dossier.
 
 Merci de joindre ce fichier à tout signalement sur [GitHub](https://github.com/lammour/cq-tdm/issues).

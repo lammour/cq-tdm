@@ -1559,8 +1559,7 @@ class PDFReportGenerator:
                 warning_data.append([
                     str(warning.slice_index + 1),
                     str(warning.roi_index + 1),
-                    # "HU" in the analysis messages: the report says UH
-                    self._cell(re.sub(r'\bHU\b', 'UH', message), 'CellSmall'),
+                    self._cell(message, 'CellSmall'),
                 ])
 
             warning_table = Table(warning_data, colWidths=[2 * cm, 2 * cm, 13 * cm], repeatRows=1)

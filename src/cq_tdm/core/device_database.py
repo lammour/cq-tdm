@@ -3,12 +3,14 @@
 import json
 import shutil
 import uuid
+from datetime import datetime
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
 from .app_config import AppConfig
 from .qc_history import QCRun
+from .utils import atomic_write_json
 from .roi_geometry import ROIGeometry
 
 
@@ -180,12 +182,15 @@ class DeviceConfig:
 class DeviceDatabase:
     """Database for storing CT device configurations."""
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, backup_unreadable: bool = True):
         """Initialize the database.
 
         Args:
             db_path: Path to the JSON database file. Defaults to user config directory.
+            backup_unreadable: Copy an unreadable file aside (the default, for the
+                database in use). False to merely probe a file the user points at.
         """
+        self._backup_unreadable = backup_unreadable
         if db_path is None:
             db_path = self.default_path()
 
@@ -244,11 +249,17 @@ class DeviceDatabase:
             self._devices = {}
             self._unreadable_devices = []
             self.load_warnings = []
-            self._backup_unreadable_file()
+            if self._backup_unreadable:
+                self._backup_unreadable_file()
 
     def _backup_unreadable_file(self):
-        """Copy an unreadable database file aside so it is not lost on the next save."""
-        backup_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+        """Copy an unreadable database file aside so it is not lost on the next save.
+
+        The copy is dated: a second failure must not overwrite the first copy,
+        which may be the only good one.
+        """
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = self.db_path.with_name(f"{self.db_path.name}.{stamp}.bak")
         try:
             shutil.copy2(self.db_path, backup_path)
         except OSError:
@@ -261,12 +272,9 @@ class DeviceDatabase:
             "devices": [d.to_dict() for d in self._devices.values()] + self._unreadable_devices,
             "folder_relocations": [{"old": o, "new": n} for o, n in self.folder_relocations],
         }
-        # Write to a temporary file and swap it in, so that a crash or a full
-        # disk mid-write cannot leave a truncated database behind.
-        tmp_path = self.db_path.with_name(self.db_path.name + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        tmp_path.replace(self.db_path)
+        # Written to a temporary file then swapped in, so that a crash or a
+        # full disk mid-write cannot leave a truncated database behind.
+        atomic_write_json(self.db_path, data)
 
     def get_all_devices(self) -> list[DeviceConfig]:
         """Get all saved devices."""

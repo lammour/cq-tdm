@@ -1,6 +1,7 @@
 """Main application window."""
 
 import base64
+import html
 import logging
 from contextlib import contextmanager
 from io import BytesIO
@@ -105,8 +106,8 @@ def warn_database_load(parent, db: DeviceDatabase) -> None:
             parent,
             "Base de données des installations",
             "Le fichier de la base de données des installations n'a pas pu être lu.\n"
-            "Une copie a été enregistrée avec l'extension .bak et l'application "
-            "utilise une base vide.\n\n"
+            "Une copie datée (extension .bak) a été enregistrée à côté de lui et "
+            "l'application utilise une base vide.\n\n"
             f"Détail : {db.load_error}",
         )
     elif db.load_warnings:
@@ -598,15 +599,33 @@ class DeviceManagerDialog(QDialog):
         except OSError as e:
             QMessageBox.warning(self, "Enregistrement", f"Impossible d'enregistrer l'installation :\n{e}")
             return
-        # The database file is the one the application must open next time
-        config = get_app_config()
-        if config.device_database_path != str(self.device_db.db_path):
-            config.device_database_path = str(self.device_db.db_path)
-            save_app_config()
+        self._remember_database_path()
         self._update_db_path_label()  # the first save creates the file
         self._refresh_device_list(device.device_id)
         from datetime import datetime
         self._status_label.setText(f"{message} — {device.display_name()}, {datetime.now():%H:%M}")
+
+    def _remember_database_path(self) -> bool:
+        """Record the open database as the one to open next time; False if it could not be saved.
+
+        The default location is not written down: the settings then follow the
+        user profile if it is moved to another account or workstation.
+        """
+        config = get_app_config()
+        is_default = self.device_db.db_path == DeviceDatabase.default_path()
+        wanted = "" if is_default else str(self.device_db.db_path)
+        if config.device_database_path == wanted:
+            return True
+        config.device_database_path = wanted
+        try:
+            save_app_config()
+        except OSError as e:
+            QMessageBox.warning(
+                self, "Base de données des installations",
+                "Le choix de cette base n'a pas pu être enregistré dans les réglages : "
+                f"elle devra être rouverte au prochain lancement.\n\n{e}")
+            return False
+        return True
 
     def _create_from_image(self):
         """Create and save the installation of the loaded image's scanner."""
@@ -776,8 +795,13 @@ class DeviceManagerDialog(QDialog):
         )
         if file_path:
             # Create empty database file
-            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(file_path).write_text('{"version": 2, "devices": []}', encoding="utf-8")
+            try:
+                Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(file_path).write_text('{"version": 2, "devices": []}', encoding="utf-8")
+            except OSError as e:
+                QMessageBox.warning(self, "Nouvelle base de données",
+                                    f"Impossible de créer la base de données :\n{e}")
+                return
             self._switch_database(file_path)
 
     def _move_database(self):
@@ -850,13 +874,18 @@ class DeviceManagerDialog(QDialog):
             )
 
     def _switch_database(self, file_path: str):
-        """Switch to a different database file."""
-        config = get_app_config()
-        config.device_database_path = file_path
-        save_app_config()
-
-        # Reload device database
-        self.device_db = DeviceDatabase(Path(file_path))
+        """Switch to a different database file; the current one stays open if it is unreadable."""
+        # Probe first: a file of another kind, or written by a newer version,
+        # must not replace the database in use, nor be overwritten by a save
+        candidate = DeviceDatabase(Path(file_path), backup_unreadable=False)
+        if candidate.load_error:
+            QMessageBox.critical(
+                self, "Base de données des installations",
+                "Ce fichier n'est pas une base de données d'installations lisible. "
+                f"La base actuelle reste ouverte.\n\nDétail : {candidate.load_error}")
+            return
+        self.device_db = candidate
+        self._remember_database_path()
         warn_database_load(self, self.device_db)
         self._update_db_path_label()
         self._refresh_device_list()
@@ -1306,6 +1335,8 @@ class MainWindow(QMainWindow):
         self._performed_by: str = get_app_config().last_performed_by
         self._validated_by: str = get_app_config().last_validated_by
         self._debug_mode: bool = False  # Debug mode for phantom detection visualization
+        # True when the HU analysis on screen could not use the frozen ROI geometry
+        self._hu_geometry_mismatch: bool = False
 
         # Device database and current device (use custom path from config if set)
         config = get_app_config()
@@ -1347,16 +1378,6 @@ class MainWindow(QMainWindow):
         self._saved_hu_slice: int | None = None
         self._saved_nps_start: int | None = None
         self._saved_nps_end: int | None = None
-
-        # Saved field values for tracking modifications (to highlight save button)
-        self._saved_hospital_name: str = ""
-        self._saved_hospital_location: str = ""
-        self._saved_device_name: str = ""
-        self._saved_commissioning_date: str = ""
-        self._saved_serial_number: str = ""
-        self._saved_inventory_number: str = ""
-        self._saved_ref_noise: str = ""
-        self._saved_ref_nps_freq: str = ""
 
         self._setup_menu()
         self._setup_ui()
@@ -1548,7 +1569,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.btn_notes)
 
         # Export button
-        self.btn_export = QPushButton("Enregistrer les résultats et exporter le PDF")
+        self.btn_export = QPushButton("Enregistrer le contrôle et exporter le PDF")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_pdf)
         right_layout.addWidget(self.btn_export)
@@ -1691,7 +1712,7 @@ class MainWindow(QMainWindow):
 <h3>Fichiers et fenêtres</h3>
 <table>
 <tr><td width="120"><b>Ctrl+O</b></td><td>Ouvrir un dossier DICOM</td></tr>
-<tr><td><b>Ctrl+E</b></td><td>Enregistrer les résultats et exporter le PDF</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>Enregistrer le contrôle et exporter le PDF</td></tr>
 <tr><td><b>Ctrl+I</b></td><td>Informations sur l'image</td></tr>
 <tr><td><b>F1</b></td><td>Aide</td></tr>
 <tr><td><b>Ctrl+Q</b></td><td>Quitter l'application</td></tr>
@@ -1731,7 +1752,7 @@ décision ANSM du 18/12/2025 (section 9.1.7).</p>
 </li>
 <li><b>Inspecter les artéfacts</b> (touche A) : vérifiez visuellement l'absence d'artéfacts
 cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
-<li><b>Enregistrer les résultats et exporter le PDF</b> (Ctrl+E) : enregistre le contrôle dans l'historique de l'installation et génère le rapport conforme</li>
+<li><b>Enregistrer le contrôle et exporter le PDF</b> (Ctrl+E) : enregistre le contrôle dans l'historique de l'installation et génère le rapport conforme</li>
 </ol>
 
 <h3>Marqueurs du curseur de coupes</h3>
@@ -2715,9 +2736,11 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
                 return
 
             # Run HU analysis, with the installation's frozen ROI geometry when it applies
-            rois = calculate_rois(hu_image, geometry=self._geometry_for_analysis(hu_image))
+            geometry, mismatch = self._geometry_for_analysis(hu_image)
+            rois = calculate_rois(hu_image, geometry=geometry)
             results = analyze_water_phantom(hu_image, rois)
             self._current_results = results
+            self._hu_geometry_mismatch = mismatch
 
             # Display ROIs
             self._display_rois(rois, slice_index)
@@ -2757,10 +2780,10 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
 
         try:
             # Run NPS analysis with new range
+            geometry, _mismatch = self._geometry_for_analysis(self._current_series.images[start])
             with self._busy("Analyse du SPB en cours…"):
                 nps_result = analyze_nps(
-                    self._current_series, slice_range=(start, end),
-                    geometry=self._geometry_for_analysis(self._current_series.images[start]))
+                    self._current_series, slice_range=(start, end), geometry=geometry)
             self._nps_results = nps_result
 
             # Display NPS ROI
@@ -2970,21 +2993,20 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         except OSError:
             pass  # read-only settings: only the convenience is lost
 
-    def _geometry_for_analysis(self, image) -> ROIGeometry | None:
-        """The installation's frozen ROI geometry, if it fits this image format.
+    def _geometry_for_analysis(self, image) -> tuple[ROIGeometry | None, bool]:
+        """(the installation's frozen ROI geometry if it fits this image format, mismatch?).
 
         Sizes and positions of the ROIs must be identical from one control to
         the next (ANSM). A geometry frozen for another matrix or pixel size is
-        unusable: the ROIs are then recomputed and the results panel says so.
+        unusable: the ROIs are then recomputed (None, True) and the results
+        panel says so.
         """
-        self._geometry_mismatch = False
         device = self._current_device
         if device is None or device.roi_geometry is None or image is None:
-            return None
+            return None, False
         if device.roi_geometry.matches(image):
-            return device.roi_geometry
-        self._geometry_mismatch = True
-        return None
+            return device.roi_geometry, False
+        return None, True
 
     def _freeze_roi_geometry(self, geometry: ROIGeometry | None) -> bool:
         """Make `geometry` the installation's ROI geometry (in memory only).
@@ -3017,7 +3039,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         r = self._current_results
         if r is None:
             return ""
-        if getattr(self, "_geometry_mismatch", False):
+        if self._hu_geometry_mismatch:
             text = ('<span class="nc">recalculées : format d\'image différent de la '
                     'référence (matrice ou taille de pixel)</span>')
         elif r.geometry is not None and r.geometry.is_frozen:
@@ -3125,8 +3147,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 QMessageBox.warning(self, "Valeurs de référence",
                                     f"Impossible d'enregistrer les valeurs de référence :\n{e}")
                 return False
-            self._saved_ref_noise = self._edit_ref_noise.text()
-            self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
         self._update_install_summary()
         self._update_results_display()
         self.statusbar.showMessage(f"Valeurs de référence définies depuis {source}", 5000)
@@ -3194,6 +3214,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 self, "Valeurs de référence",
                 "Le fantôme n'a pas été détecté : les ROI ne sont pas placées de façon fiable "
                 "et ce contrôle ne peut pas servir de référence.")
+            return
+        # The ROI geometry is frozen "from the control of <date>": a reference
+        # control has a date, asked now if the images carry none
+        if not self._ensure_control_date():
             return
         self._confirm_and_set_references(self._nps_results.noise, self._nps_results.mean_frequency,
                                          "analyse en cours",
@@ -3336,9 +3360,11 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         root = QFileDialog.getExistingDirectory(self, "Dossier dans lequel rechercher la série", "")
         if not root:
             return None
-        from PySide6.QtWidgets import QApplication, QProgressDialog
+        from PySide6.QtWidgets import QProgressDialog
         progress = QProgressDialog("Recherche de la série…", "Annuler", 0, 0, self)
         progress.setWindowTitle("Recherche")
+        # Modal: the events processed during the walk must not start another load
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(300)
         progress.setValue(0)
 
@@ -3596,53 +3622,55 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
+        try:
 
-        # Dark theme styling
-        fig.patch.set_facecolor('#2b2b2b')
-        ax.set_facecolor('#1e1e1e')
+            # Dark theme styling
+            fig.patch.set_facecolor('#2b2b2b')
+            ax.set_facecolor('#1e1e1e')
 
-        # Plot radial NPS
-        ax.plot(
-            nps_result.frequencies_radial,
-            nps_result.nps_radial,
-            color='#4fc3f7',
-            linewidth=1.5,
-            label='SPB radial'
-        )
+            # Plot radial NPS
+            ax.plot(
+                nps_result.frequencies_radial,
+                nps_result.nps_radial,
+                color='#4fc3f7',
+                linewidth=1.5,
+                label='SPB radial'
+            )
 
-        # Mark the mean frequency
-        ax.axvline(
-            x=nps_result.mean_frequency,
-            color='#ff9800',
-            linestyle='--',
-            linewidth=1,
-            alpha=0.7,
-            label=f'f_moy: {format_fr(nps_result.mean_frequency, 2)} c/mm'
-        )
+            # Mark the mean frequency
+            ax.axvline(
+                x=nps_result.mean_frequency,
+                color='#ff9800',
+                linestyle='--',
+                linewidth=1,
+                alpha=0.7,
+                label=f'f_moy: {format_fr(nps_result.mean_frequency, 2)} c/mm'
+            )
 
-        # Styling
-        ax.set_xlabel('Fréquence (cycles/mm)', color='#aaa', fontsize=9)
-        ax.set_ylabel('SPB (UH²·mm²)', color='#aaa', fontsize=9)
-        ax.tick_params(colors='#888', labelsize=8)
-        ax.spines['bottom'].set_color('#555')
-        ax.spines['left'].set_color('#555')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.grid(True, alpha=0.2, color='#555')
-        ax.legend(loc='upper right', fontsize=8, facecolor='#333', edgecolor='#555', labelcolor='#ccc')
+            # Styling
+            ax.set_xlabel('Fréquence (cycles/mm)', color='#aaa', fontsize=9)
+            ax.set_ylabel('SPB (UH²·mm²)', color='#aaa', fontsize=9)
+            ax.tick_params(colors='#888', labelsize=8)
+            ax.spines['bottom'].set_color('#555')
+            ax.spines['left'].set_color('#555')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, alpha=0.2, color='#555')
+            ax.legend(loc='upper right', fontsize=8, facecolor='#333', edgecolor='#555', labelcolor='#ccc')
 
-        # Set axis limits (x to Nyquist, y from 0)
-        nyquist = 1.0 / (2.0 * nps_result.pixel_size_mm)
-        ax.set_xlim(0, nyquist)
-        ax.set_ylim(0, None)
+            # Set axis limits (x to Nyquist, y from 0)
+            nyquist = 1.0 / (2.0 * nps_result.pixel_size_mm)
+            ax.set_xlim(0, nyquist)
+            ax.set_ylim(0, None)
 
-        plt.tight_layout()
+            plt.tight_layout()
 
-        # Save to base64
-        buffer = BytesIO()
-        fig.savefig(buffer, format='png', facecolor=fig.get_facecolor(), edgecolor='none')
-        plt.close(fig)
-        buffer.seek(0)
+            # Save to base64
+            buffer = BytesIO()
+            fig.savefig(buffer, format='png', facecolor=fig.get_facecolor(), edgecolor='none')
+            buffer.seek(0)
+        finally:
+            plt.close(fig)
 
         return base64.b64encode(buffer.read()).decode('utf-8')
 
@@ -3668,7 +3696,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             desc_row = ""
             if self._artifact_description:
                 # Escape HTML in description
-                import html
                 escaped_desc = html.escape(self._artifact_description).replace('\n', '<br/>')
                 desc_row = f'<tr><th>Description</th><td>{escaped_desc}</td></tr>'
         else:
@@ -3890,7 +3917,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             serial = self._edit_serial_number.text().strip()
             if serial:
                 parts.append(f"n° série {serial}")
-            saved = " · ".join(parts) if parts else "Aucune information renseignée"
+            # The label is rich text: "A&B" or "<2" typed by the user stay as typed
+            saved = html.escape(" · ".join(parts)) if parts else "Aucune information renseignée"
 
         noise_text = self._edit_ref_noise.text().strip()
         nps_text = self._edit_ref_nps_freq.text().strip()
@@ -3954,15 +3982,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_hu_slice = None
             self._saved_nps_start = None
             self._saved_nps_end = None
-            # Clear saved field values
-            self._saved_hospital_name = ""
-            self._saved_hospital_location = ""
-            self._saved_device_name = ""
-            self._saved_commissioning_date = ""
-            self._saved_serial_number = ""
-            self._saved_inventory_number = ""
-            self._saved_ref_noise = ""
-            self._saved_ref_nps_freq = ""
         else:
             # Load device values (skip placeholder-like values from old configs)
             def load_value(edit, value):
@@ -4005,16 +4024,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                     self.image_viewer.set_hu_slice_index(device.hu_slice_index)
                 if device.nps_start_slice is not None and device.nps_end_slice is not None:
                     self.image_viewer.set_nps_slice_range(device.nps_start_slice, device.nps_end_slice)
-
-            # Store saved field values for modification tracking
-            self._saved_hospital_name = self._edit_hospital_name.text()
-            self._saved_hospital_location = self._edit_hospital_location.text()
-            self._saved_device_name = self._edit_device_name.text()
-            self._saved_commissioning_date = self._edit_commissioning_date.text()
-            self._saved_serial_number = self._edit_serial_number.text()
-            self._saved_inventory_number = self._edit_inventory_number.text()
-            self._saved_ref_noise = self._edit_ref_noise.text()
-            self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
 
     def _try_auto_detect_device(self):
         """Try to auto-detect device from database based on DICOM metadata."""

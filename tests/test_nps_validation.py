@@ -665,8 +665,9 @@ def generate_combined_validation_figure(test_data_dir: Path, output_dir: Path) -
         dicom_dir = series_dir / dicom_subdir
 
         if not dicom_dir.exists():
-            print(f"Skipping {series_name}: directory not found")
-            continue
+            # The figures are published as the validation of the release: a
+            # series missing from the data must fail, not shrink the figure
+            raise FileNotFoundError(f"ANSM reference series missing: {dicom_dir}")
 
         # Load reference data
         ref_config = load_roi_config(series_dir)
@@ -847,8 +848,9 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
         dicom_dir = series_dir / dicom_subdir
 
         if not dicom_dir.exists():
-            print(f"Skipping {series_name}: directory not found")
-            continue
+            # The figures are published as the validation of the release: a
+            # series missing from the data must fail, not shrink the figure
+            raise FileNotFoundError(f"ANSM reference series missing: {dicom_dir}")
 
         # Load reference ROI config
         ref_config = load_roi_config(series_dir)

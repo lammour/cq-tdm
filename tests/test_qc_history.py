@@ -268,7 +268,7 @@ def test_unreadable_entries_do_not_hide_the_rest_and_survive_a_save(tmp_path):
     saved = json.loads(db_path.read_text(encoding="utf-8"))
     assert bad_run in saved["devices"][0]["runs"]
     assert bad_device in saved["devices"]
-    assert not db_path.with_suffix(".json.bak").exists()
+    assert not list(tmp_path.glob("devices.json.*.bak"))
 
 
 def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
@@ -276,7 +276,15 @@ def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
     db_path.write_text("{ not json", encoding="utf-8")
     db = DeviceDatabase(db_path)
     assert db.load_error and db.get_all_devices() == [] and db.load_warnings == []
-    assert db_path.with_suffix(".json.bak").read_text(encoding="utf-8") == "{ not json"
+    # The copy is dated, so a later failure cannot overwrite it
+    (backup,) = tmp_path.glob("devices.json.*.bak")
+    assert backup.read_text(encoding="utf-8") == "{ not json"
+
+    # A file that is merely probed (the user pointing at it) is left alone
+    other = tmp_path / "other.json"
+    other.write_text("{ not json", encoding="utf-8")
+    assert DeviceDatabase(other, backup_unreadable=False).load_error
+    assert not list(tmp_path.glob("other.json.*"))
 
 
 def test_reexporting_a_series_keeps_its_corrective_action(tmp_path):

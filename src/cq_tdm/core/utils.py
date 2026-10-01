@@ -1,5 +1,32 @@
 """Utility functions for CQ TDM."""
 
+import json
+import os
+import tempfile
+from pathlib import Path
+
+
+def atomic_write_json(path: Path, data) -> None:
+    """Write `data` as JSON to `path` without ever leaving a truncated file.
+
+    The content goes to a temporary file in the same folder, which then
+    replaces the target in one step: a crash or a full disk mid-write leaves
+    the previous file intact. The temporary name is unique, so two writers
+    cannot truncate each other's file.
+    """
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
 
 def format_fr(value: float, decimals: int = 1, sign: bool = False) -> str:
     """Format a number with French decimal separator (comma).

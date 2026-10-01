@@ -1,9 +1,10 @@
 name: Publish to PyPI
 
+# Only a published release publishes: a manual run would push whatever branch
+# it is started from to the real index.
 on:
   release:
     types: [published]
-  workflow_dispatch:  # Allow manual trigger for testing
 
 jobs:
   publish:
@@ -21,6 +22,14 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+
+      - name: Check that the version matches the release tag
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/cq_tdm/__init__.py)
+          if [ "v$version" != "${{ github.event.release.tag_name }}" ]; then
+            echo "::error::__version__ is $version but the release tag is ${{ github.event.release.tag_name }}"
+            exit 1
+          fi
 
       - name: Install build tools
         run: pip install build

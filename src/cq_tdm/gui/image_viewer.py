@@ -736,11 +736,6 @@ class ImageViewer(QGraphicsView):
             label.setZValue(15)
             self._debug_items.append(label)
 
-    # Legacy compatibility
-    def set_rois(self, rois: list[ROI]):
-        """Set ROIs (legacy - uses water phantom category)."""
-        self.set_water_rois(rois)
-
     def clear_rois(self):
         """Clear all ROIs."""
         self.clear_water_rois()
