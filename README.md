@@ -64,7 +64,7 @@ Méthode de calcul :
 
 Cette convention reproduit les spectres de référence d'IQMetrix-CT point par point. Elle affecte chaque couronne à son bord inférieur : la fréquence moyenne obtenue est donc légèrement inférieure à celle que donnerait un calcul au rayon exact de chaque point (de 2 à 4 % sur les séries de référence). C'est un choix d'équivalence avec la référence ANSM.
 
-**Depuis la version 0.8.0, le bruit et la fréquence moyenne ne sont pas comparables à ceux des versions 0.7 et antérieures** : la fréquence moyenne est plus basse de 2 à 4 % environ, et le bruit, auparavant mesuré dans la ROI centrale d'une seule coupe, est plus bas de 7 à 9 % sur les séries de référence. Les valeurs de référence du bruit et du SPB doivent être redéfinies au premier contrôle.
+**Depuis la version 0.8.0, le bruit et la fréquence moyenne ne sont pas comparables à ceux des versions 0.7 et antérieures** : sur les séries de référence ANSM, la fréquence moyenne baisse de 2 à 4,5 % pour quatre séries et augmente de 3,4 % pour la série au filtre le plus dur ; le bruit, auparavant mesuré dans la ROI centrale d'une seule coupe, est plus bas de 6 à 9 %. Les valeurs de référence du bruit et du SPB doivent être redéfinies au premier contrôle.
 
 Un protocole de test automatisé est disponible avec le code source du logiciel. Il compare la fréquence moyenne (écart toléré : 2 %), le bruit (écart toléré : 1 %) et le spectre radial, point par point, avec les références fournies par l'ANSM. Il peut être exécuté avec pytest : 
 
