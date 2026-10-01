@@ -67,10 +67,14 @@ def test_folder_uid_and_match(archive: Path):
 
 
 def test_relocation_between_strips_common_suffix():
-    assert relocation_between("/data/2026/S1", "/archive/2026/S1") == ("/data", "/archive")
-    assert relocation_between("/data/2026/S1", "/archive/old/2026/S1") == ("/data", "/archive/old")
+    def native(*paths: str) -> tuple[str, ...]:
+        """Prefixes come back with the separators of the platform."""
+        return tuple(str(Path(p)) for p in paths)
+
+    assert relocation_between("/data/2026/S1", "/archive/2026/S1") == native("/data", "/archive")
+    assert relocation_between("/data/2026/S1", "/archive/old/2026/S1") == native("/data", "/archive/old")
     # Nothing in common: maps this one folder only
-    assert relocation_between("/data/2026/S1", "/mnt/x/Y") == ("/data/2026/S1", "/mnt/x/Y")
+    assert relocation_between("/data/2026/S1", "/mnt/x/Y") == native("/data/2026/S1", "/mnt/x/Y")
     assert relocation_between("/data/2026/S1", "/data/2026/S1") is None
     assert relocation_between("", "/x") is None
 
