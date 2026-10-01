@@ -25,6 +25,7 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Tailles et positions des ROI figées par installation lors du contrôle de référence et réutilisées à l'identique aux contrôles suivants
   - Export des ROI (JSON, compatible avec IQMetrix-CT)
 - **Génération de rapports PDF** avec statuts de conformité et valeurs de référence ; section « Historique des contrôles » optionnelle (« Configuration > Rapports… », désactivée par défaut)
+  - Un contrôle n'est déclaré conforme que si tous les tests ont été jugés : sans inspection des artéfacts, sans valeurs de référence ou sans SPB, le rapport porte la mention « Contrôle incomplet » et le logiciel le signale avant l'export
   - Le rapport reprend les éléments demandés dans le registre des opérations (décision ANSM, point 3.2.2) : paramètres du protocole de contrôle (kV, mAs, temps de rotation, mode et pitch, collimation, foyer, filtre, épaisseur, matrice, champ de vue, IDSV), identifiant et dossier des images DICOM archivées, position et taille de chaque ROI, fantôme utilisé, protocole clinique d'origine, algorithme de reconstruction, actions correctives
 - **Historique des résultats** :
   - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
@@ -63,7 +64,7 @@ Méthode de calcul :
 
 Cette convention reproduit les spectres de référence d'IQMetrix-CT point par point. Elle affecte chaque couronne à son bord inférieur : la fréquence moyenne obtenue est donc légèrement inférieure à celle que donnerait un calcul au rayon exact de chaque point (de 2 à 4 % sur les séries de référence). C'est un choix d'équivalence avec la référence ANSM.
 
-**Depuis la version qui a introduit cette méthode, le bruit et la fréquence moyenne ne sont pas comparables à ceux des versions 0.7 et antérieures** : la fréquence moyenne est plus basse de 2 à 4 % environ, et le bruit, auparavant mesuré dans la ROI centrale d'une seule coupe, est plus bas de 7 à 9 % sur les séries de référence. Les valeurs de référence du bruit et du SPB doivent être redéfinies au premier contrôle.
+**Depuis la version 0.8.0, le bruit et la fréquence moyenne ne sont pas comparables à ceux des versions 0.7 et antérieures** : la fréquence moyenne est plus basse de 2 à 4 % environ, et le bruit, auparavant mesuré dans la ROI centrale d'une seule coupe, est plus bas de 7 à 9 % sur les séries de référence. Les valeurs de référence du bruit et du SPB doivent être redéfinies au premier contrôle.
 
 Un protocole de test automatisé est disponible avec le code source du logiciel. Il compare la fréquence moyenne (écart toléré : 2 %), le bruit (écart toléré : 1 %) et le spectre radial, point par point, avec les références fournies par l'ANSM. Il peut être exécuté avec pytest : 
 
