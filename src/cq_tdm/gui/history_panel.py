@@ -28,7 +28,21 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.app_config import get_app_config
-from ..core.qc_history import METRICS, NC, NCG, OK, STATUS_SHORT, QCRun, evaluate_run, iso_to_fr
+from ..core.qc_history import (
+    INCOMPLETE,
+    METRICS,
+    NC,
+    NC_OR_NCG,
+    NC_OR_NCG_DETAIL,
+    NCG,
+    OK,
+    PENDING,
+    STATUS_SHORT,
+    QCRun,
+    evaluate_run,
+    iso_to_fr,
+    pending_reasons,
+)
 from ..core.trend_chart import DARK_PALETTE, LIGHT_PALETTE, render_trend_chart
 from ..core.utils import format_fr
 
@@ -233,16 +247,23 @@ class HistoryPanel(QWidget):
             for c, (text, status) in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if status in (NC, NCG):
+                if status in (NC, NCG, NC_OR_NCG):
                     item.setForeground(QColor(pal[status]))
                     if c == last:
                         f = item.font(); f.setBold(True); item.setFont(f)
                 elif status == OK and c == last:
                     item.setForeground(QColor(pal["ok"]))
+                elif status == INCOMPLETE:
+                    item.setForeground(QColor(pal[PENDING]))
                 if run.is_current:
                     f = item.font(); f.setItalic(True); item.setFont(f)
                 if run.notes:
                     item.setToolTip(run.notes)
+                if status == INCOMPLETE:
+                    item.setToolTip("Contrôle incomplet : " + " ; ".join(
+                        pending_reasons(st, nps_measured=run.nps_freq is not None)))
+                elif status == NC_OR_NCG:
+                    item.setToolTip(NC_OR_NCG_DETAIL)
                 self._table.setItem(r, c, item)
 
         n = len(self._runs)
@@ -250,7 +271,7 @@ class HistoryPanel(QWidget):
             self._summary.setText(self._placeholder or "Aucun contrôle enregistré pour cette installation")
         else:
             statuses = [evaluate_run(r)["overall"] for r in self._runs]
-            nc = statuses.count(NC) + statuses.count(NCG)
+            nc = sum(statuses.count(s) for s in (NC, NCG, NC_OR_NCG))
             first = self._runs[-1].date.strftime("%m/%Y")
             self._summary.setText(
                 f"{n} contrôle{'s' if n > 1 else ''} depuis {first} · {nc} non conforme{'s' if nc > 1 else ''} · "

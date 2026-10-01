@@ -14,12 +14,12 @@ from .qc_history import METRICS, PENDING, QCRun, evaluate_run, tolerance_band
 
 DARK_PALETTE = dict(
     bg="#2b2b2b", fg="#e0e0e0", muted="#aaaaaa", grid="#555555",
-    ok="#66bb6a", nc="#ffa726", ncg="#ef5350", pending="#888888",
+    ok="#66bb6a", nc="#ffa726", ncg="#ef5350", nc_or_ncg="#ef5350", pending="#888888",
     band="#2e7d32", ref="#4fc3f7", current="#ce93d8", line="#4fc3f7",
 )
 LIGHT_PALETTE = dict(
     bg="#ffffff", fg="#222222", muted="#666666", grid="#dddddd",
-    ok="#2e7d32", nc="#ef6c00", ncg="#c62828", pending="#9e9e9e",
+    ok="#2e7d32", nc="#ef6c00", ncg="#c62828", nc_or_ncg="#c62828", pending="#9e9e9e",
     band="#a5d6a7", ref="#1565c0", current="#6a1b9a", line="#1565c0",
 )
 
