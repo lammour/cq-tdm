@@ -73,7 +73,7 @@ class QCRun:
     # Mean of the standard deviations of the NPS ROIs over the analysed slices
     # (NPSResult.noise); None when the NPS could not be computed. Runs recorded
     # by versions up to 0.7 hold the standard deviation of the central ROI of
-    # the HU slice instead (7-9 % higher on the ANSM series).
+    # the HU slice instead (6-10 % higher on the ANSM series).
     noise: float | None = 0.0
     nps_freq: float | None = None
     artifacts_present: bool | None = None
