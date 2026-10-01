@@ -21,6 +21,9 @@ class AppConfig:
 
     # Database settings
     device_database_path: str = ""  # Custom path to devices.json (empty = default)
+    # Installation selected last, reselected at startup so its history of
+    # controls is on screen without loading an image
+    last_device_id: str = ""
 
     # UI settings
     theme: str = "dark"  # "dark" or "light"

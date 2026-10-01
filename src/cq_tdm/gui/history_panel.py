@@ -76,6 +76,7 @@ class HistoryPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._runs: list[QCRun] = []
+        self._placeholder: str = ""  # summary text when there is no run to show
         self._current: QCRun | None = None
         self._ref_noise: float | None = None
         self._ref_nps: float | None = None
@@ -169,8 +170,14 @@ class HistoryPanel(QWidget):
 
     # -- public API ---------------------------------------------------------
 
-    def set_runs(self, runs: list[QCRun], ref_noise: float | None, ref_nps: float | None):
-        """Replace the history and the reference values used for the bands."""
+    def set_runs(self, runs: list[QCRun], ref_noise: float | None, ref_nps: float | None,
+                 placeholder: str = ""):
+        """Replace the history and the reference values used for the bands.
+
+        `placeholder` replaces the "no control recorded" summary, to say why the
+        list is empty when no installation is selected.
+        """
+        self._placeholder = placeholder
         self._runs = sorted(runs, key=lambda r: (r.date, r.recorded_at), reverse=True)
         self._ref_noise, self._ref_nps = ref_noise, ref_nps
         self._refresh()
@@ -240,7 +247,7 @@ class HistoryPanel(QWidget):
 
         n = len(self._runs)
         if n == 0:
-            self._summary.setText("Aucun contrôle enregistré pour cette installation")
+            self._summary.setText(self._placeholder or "Aucun contrôle enregistré pour cette installation")
         else:
             statuses = [evaluate_run(r)["overall"] for r in self._runs]
             nc = statuses.count(NC) + statuses.count(NCG)

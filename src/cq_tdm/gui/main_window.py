@@ -1237,6 +1237,10 @@ class MainWindow(QMainWindow):
         self._setup_statusbar()
         self._setup_shortcuts()
 
+        # No image yet: the history of the installation used last is the home view
+        self._select_device(self._default_device())
+        self._results_tabs.setCurrentIndex(self._results_tabs.indexOf(self.history_panel))
+
     def _setup_menu(self):
         """Set up the menu bar."""
         menubar = self.menuBar()
@@ -1852,6 +1856,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             nps_start, nps_end = self.image_viewer.get_nps_slice_range()
             self._on_hu_slice_changed(hu_slice)
             self._on_nps_range_changed(nps_start, nps_end)
+            # The history is the home view; with a series, the results are the point
+            self._results_tabs.setCurrentIndex(self._results_tabs.indexOf(self.results_browser))
 
         except Exception as e:
             self.statusbar.showMessage(f"Erreur: {e}")
@@ -2505,9 +2511,40 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
     def _refresh_history(self, device: DeviceConfig | None):
         """Fill the history tab for the selected device."""
         if device is None:
-            self.history_panel.set_runs([], None, None)
+            if getattr(self, "_current_image", None) is None:
+                placeholder = "Sélectionnez une installation ci-dessus pour afficher l'historique de ses contrôles"
+            else:
+                placeholder = ("Installation inconnue : créez-la avec « Nouvelle installation » "
+                               "pour conserver l'historique de ses contrôles")
+            self.history_panel.set_runs([], None, None, placeholder=placeholder)
             return
         self.history_panel.set_runs(list(device.runs), device.reference_noise, device.reference_nps_freq)
+
+    def _default_device(self) -> DeviceConfig | None:
+        """Installation to show when nothing designates one: the one used last, or the only one."""
+        device = self._device_db.get_device(get_app_config().last_device_id)
+        if device is None:
+            devices = self._device_db.get_all_devices()
+            device = devices[0] if len(devices) == 1 else None
+        return device
+
+    def _select_device(self, device: DeviceConfig | None):
+        """Make `device` the current installation and refresh everything that shows it."""
+        self._current_device = device
+        self._load_device_config(device)
+        self._refresh_device_combo()
+        self._update_install_summary()
+
+    def _remember_device(self, device: DeviceConfig):
+        """Record `device` as the installation to reselect at the next startup."""
+        config = get_app_config()
+        if config.last_device_id == device.device_id:
+            return
+        config.last_device_id = device.device_id
+        try:
+            save_app_config()
+        except OSError:
+            pass  # read-only settings: only the convenience is lost
 
     def _geometry_for_analysis(self, image) -> ROIGeometry | None:
         """The installation's frozen ROI geometry, if it fits this image format.
@@ -3390,6 +3427,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
     def _load_device_config(self, device: DeviceConfig | None):
         """Load device configuration into the UI fields."""
         self._refresh_history(device)
+        if device is not None:
+            self._remember_device(device)
         if device is None:
             # Clear fields (placeholders will show in grey)
             self._edit_hospital_name.clear()
@@ -3541,6 +3580,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             device = self._device_db.get_device(current_id) if current_id else None
             if device is None and dialog.selected_device_id:
                 device = self._device_db.get_device(dialog.selected_device_id)
+            if device is None:
+                device = self._default_device()
         self._current_device = device
         self._load_device_config(device)
         # References defined in the dialog froze the geometry of the analysis
