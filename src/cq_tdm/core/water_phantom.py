@@ -17,6 +17,7 @@ from typing import Optional
 import numpy as np
 
 from .dicom_loader import DicomImage, detect_phantom
+from .qc_history import NCG, OK, STATUS_LABEL, uniformity_status, water_ct_status
 from .roi_geometry import ROIGeometry, PERIPHERAL_DISTANCE_MM
 
 
@@ -268,14 +269,15 @@ def analyze_water_phantom(
     # Noise: standard deviation of central ROI
     noise = central.std_hu
 
-    # Acceptance criteria (from ANSM decision of 18/12/2025)
-    # Water CT: acceptable if within ±7 HU of 0
-    water_ct_acceptable = abs(water_ct) <= 7
-    water_ct_ncg = abs(water_ct) > 25  # NCG if outside ±25 HU
+    # Acceptance criteria (ANSM decision of 18/12/2025): one definition, shared
+    # with the history and the report (qc_history)
+    # (exactly ±25 HU is neither flag: read water_ct_status() for the verdict)
+    ct_status = water_ct_status(water_ct)
+    water_ct_acceptable = ct_status == OK
+    water_ct_ncg = ct_status == NCG
 
-    # Uniformity: acceptable if peripheral within ±7 HU of central.
     # The decision defines no NCG threshold for uniformity.
-    uniformity_acceptable = uniformity <= 7
+    uniformity_acceptable = uniformity_status(uniformity) == OK
 
     return WaterPhantomResults(
         geometry=rois.geometry,
@@ -303,7 +305,7 @@ def format_results_text(results: WaterPhantomResults) -> str:
         "NOMBRE CT DE L'EAU",
         f"  Valeur centrale: {results.water_ct_number:+.1f} HU",
         "  Critère: ±7 HU (NCG: ±25 HU)",
-        f"  Statut: {'✓ CONFORME' if results.water_ct_acceptable else ('✗ NCG' if results.water_ct_ncg else '✗ NON CONFORME')}",
+        f"  Statut: {STATUS_LABEL[water_ct_status(results.water_ct_number)]}",
         "",
         "UNIFORMITÉ",
         f"  Écart max centre-périphérie: {results.uniformity:.1f} HU",

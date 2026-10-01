@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QGridLayout,
     QStatusBar,
     QLabel,
     QLineEdit,
@@ -37,7 +36,11 @@ from PySide6.QtWidgets import (
 from ..core.app_config import get_app_config, save_app_config
 from ..core.device_database import DeviceConfig, DeviceDatabase
 from ..core.utils import format_fr, parse_float_fr
-from ..core.qc_history import OK, QCRun, dicom_date_to_iso, iso_to_fr, noise_bounds, noise_status, nps_status
+from ..core.qc_history import (
+    INCOMPLETE, NC_OR_NCG, NC_OR_NCG_NOTICE, NCG, OK, QCRun, dicom_date_to_iso,
+    evaluate_measurements, iso_to_fr, noise_bounds, noise_status, nps_status, pending_reasons,
+    water_ct_status,
+)
 from ..core.dicom_locator import (
     find_series_folder, folder_matches, relative_to_database, relocation_between, resolve_dicom_folder,
 )
@@ -86,6 +89,29 @@ _theme_colors = theme_colors
 
 
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
+
+
+def warn_database_load(parent, db: DeviceDatabase) -> None:
+    """Tell the user what could not be read from the installations database, if anything."""
+    if db.load_error:
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            "Le fichier de la base de données des installations n'a pas pu être lu.\n"
+            "Une copie a été enregistrée avec l'extension .bak et l'application "
+            "utilise une base vide.\n\n"
+            f"Détail : {db.load_error}",
+        )
+    elif db.load_warnings:
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            "Certaines entrées de la base de données des installations n'ont pas pu être "
+            "lues et sont ignorées :\n\n"
+            + "\n".join(f"• {w}" for w in db.load_warnings)
+            + f"\n\nElles sont conservées telles quelles dans le fichier {db.db_path} ; "
+            "le reste de la base est utilisable.",
+        )
 
 
 class DeviceManagerDialog(QDialog):
@@ -806,6 +832,7 @@ class DeviceManagerDialog(QDialog):
 
         # Reload device database
         self.device_db = DeviceDatabase(Path(file_path))
+        warn_database_load(self, self.device_db)
         self._update_db_path_label()
         self._refresh_device_list()
         self._clear_form()
@@ -1186,8 +1213,8 @@ class MainWindow(QMainWindow):
         db_path = Path(config.device_database_path) if config.device_database_path else None
         self._device_db = DeviceDatabase(db_path)
         self._current_device: DeviceConfig | None = None
-        if self._device_db.load_error:
-            QTimer.singleShot(0, self._warn_device_db_load_error)
+        if self._device_db.load_error or self._device_db.load_warnings:
+            QTimer.singleShot(0, lambda: warn_database_load(self, self._device_db))
 
         # Report metadata (empty by default, shown as grey placeholders in UI)
         self._hospital_name: str = ""
@@ -1992,6 +2019,9 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
+        if not self._confirm_incomplete_export():
+            return
+
         # Default filename with device info and the scan date (same date as the history)
         default_name = generate_report_filename(
             device_name=self._device_name,
@@ -2017,11 +2047,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                         description=self._artifact_description,
                     )
 
-                # Get reference values from text fields (works even without saved device)
-                ref_noise_text = self._edit_ref_noise.text().strip()
-                ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
-                ref_nps_text = self._edit_ref_nps_freq.text().strip()
-                ref_nps_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
+                ref_noise, ref_nps_freq = self._reference_values()
 
                 # Get NPS middle slice image for the report
                 nps_middle_image = None
@@ -2083,6 +2109,54 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             except Exception as e:
                 self.statusbar.showMessage(f"Erreur d'export: {e}")
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'export:\n{e}")
+
+    def _reference_values(self) -> tuple[float | None, float | None]:
+        """Reference noise and SPB frequency from the text fields (works without a saved device)."""
+        ref_noise_text = self._edit_ref_noise.text().strip()
+        ref_nps_text = self._edit_ref_nps_freq.text().strip()
+        return (parse_float_fr(ref_noise_text) if ref_noise_text else None,
+                parse_float_fr(ref_nps_text) if ref_nps_text else None)
+
+    def _current_statuses(self) -> dict[str, str]:
+        """Status of each test of the control on screen, plus ``overall`` (same rule as the PDF)."""
+        r = self._current_results
+        ref_noise, ref_nps_freq = self._reference_values()
+        return evaluate_measurements(
+            r.water_ct_number if r else None,
+            r.uniformity if r else None,
+            r.noise if r else None,
+            self._nps_results.mean_frequency if self._nps_results else None,
+            self._artifact_result,
+            ref_noise,
+            ref_nps_freq,
+        )
+
+    def _confirm_incomplete_export(self) -> bool:
+        """Before an export, list the tests that were not judged; False to cancel.
+
+        The report of such a control cannot say "CONFORME": the user either
+        completes the control or exports it knowingly.
+        """
+        statuses = self._current_statuses()
+        missing = pending_reasons(statuses, nps_measured=self._nps_results is not None)
+        if not missing:
+            return True
+        text = "Ce contrôle est incomplet :\n\n" + "\n".join(f"• {m}" for m in missing)
+        if statuses["overall"] == INCOMPLETE:
+            text += ("\n\nLe rapport portera la mention « CONTRÔLE INCOMPLET » "
+                     "à la place du verdict de conformité.")
+        else:
+            text += "\n\nLe rapport signalera ces tests comme non réalisés."
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Contrôle incomplet")
+        box.setText(text)
+        export = box.addButton("Exporter quand même", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton("Compléter le contrôle", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is export
 
     def _export_nps_rois_json(self):
         """Export NPS ROI positions to JSON file."""
@@ -2487,17 +2561,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         </div>
         """
 
-    def _warn_device_db_load_error(self):
-        """Tell the user the device database file could not be read."""
-        QMessageBox.warning(
-            self,
-            "Base de données des appareils",
-            "Le fichier de la base de données des appareils n'a pas pu être lu.\n"
-            "Une copie a été enregistrée avec l'extension .bak et l'application "
-            "démarre avec une base vide.\n\n"
-            f"Détail : {self._device_db.load_error}",
-        )
-
     def _update_results_display(self):
         """Update the results browser with current results."""
         html = self._format_results_html()
@@ -2649,10 +2712,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         if run is None or self._current_device is None:
             return ""
         run.pdf_path = pdf_path
-        ref_noise_text = self._edit_ref_noise.text().strip()
-        ref_nps_text = self._edit_ref_nps_freq.text().strip()
-        run.ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
-        run.ref_nps_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
+        run.ref_noise, run.ref_nps_freq = self._reference_values()
         # First recorded control: its ROI sizes and positions become the ones
         # every later control must reuse (add_run saves the device)
         if self._current_device.roi_geometry is None:
@@ -2979,13 +3039,19 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             else:
                 return '<span class="nc">✗ NC</span>'
 
+        ct_status = water_ct_status(r.water_ct_number)
+        if ct_status == NC_OR_NCG:
+            ct_status_html = f'<span class="ncg">✗ {NC_OR_NCG_NOTICE}</span>'
+        else:
+            ct_status_html = status_html(ct_status == OK, ct_status == NCG)
+
         return f"""
         <div class="section">
             <div class="section-title">Nombre CT de l'eau</div>
             <table>
                 <tr><th>Valeur centrale</th><td class="value">{format_fr(r.water_ct_number, 1, sign=True)} HU</td></tr>
                 <tr><th>Critère</th><td>±7 HU (NCG: ±25 HU)</td></tr>
-                <tr><th>Statut</th><td>{status_html(r.water_ct_acceptable, r.water_ct_ncg)}</td></tr>
+                <tr><th>Statut</th><td>{ct_status_html}</td></tr>
             </table>
         </div>
 

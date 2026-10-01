@@ -72,6 +72,30 @@ def test_nothing_selected_says_what_to_do(qapp, config):
     assert window._results_tabs.currentWidget() is window.history_panel
 
 
+def test_export_asks_before_an_incomplete_control(qapp, config, monkeypatch):
+    """Exporting without artifact inspection or references must not go unnoticed."""
+    from types import SimpleNamespace
+
+    make_device(DeviceDatabase(Path(config.device_database_path)), "CT1", runs=1)
+    window = mw.MainWindow()
+    window._current_results = SimpleNamespace(water_ct_number=0.5, uniformity=1.0, noise=3.0)
+    window._nps_results = SimpleNamespace(mean_frequency=0.3)
+    window._edit_ref_noise.setText("3,0")
+    window._edit_ref_nps_freq.setText("0,300")
+    window._artifact_result = False
+
+    shown = []
+    monkeypatch.setattr(mw.QMessageBox, "exec", lambda box: shown.append(box.text()))
+    assert window._confirm_incomplete_export() is True and shown == []
+
+    window._artifact_result = None
+    window._edit_ref_noise.setText("")
+    assert window._confirm_incomplete_export() is False  # nothing clicked: not exported
+    assert "inspection visuelle des artéfacts non réalisée" in shown[0]
+    assert "stabilité du bruit non évaluée" in shown[0]
+    assert "CONTRÔLE INCOMPLET" in shown[0]
+
+
 def test_forgotten_installation_falls_back(qapp, config):
     db = DeviceDatabase(Path(config.device_database_path))
     only = make_device(db, "CT1", runs=1)

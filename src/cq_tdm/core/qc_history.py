@@ -19,9 +19,24 @@ OK = "ok"
 NC = "nc"
 NCG = "ncg"
 PENDING = "pending"  # cannot be judged (no reference value, no inspection...)
+# Overall status only: nothing is non-conforming but at least one test was not judged
+INCOMPLETE = "incomplete"
+# Water CT number of exactly ±25 HU: the decision lists that value both in the
+# "remise en conformité" tier and in the "non-conformité grave" tier, so the
+# software does not choose and sends the user to the text
+NC_OR_NCG = "nc_or_ncg"
 
-STATUS_LABEL = {OK: "Conforme", NC: "Non conforme", NCG: "NC grave", PENDING: "—"}
-STATUS_SHORT = {OK: "Conforme", NC: "NC", NCG: "NCG", PENDING: "—"}
+STATUS_LABEL = {OK: "Conforme", NC: "Non conforme", NCG: "NC grave", PENDING: "—",
+                INCOMPLETE: "Incomplet", NC_OR_NCG: "NC ou NCG"}
+STATUS_SHORT = {OK: "Conforme", NC: "NC", NCG: "NCG", PENDING: "—", INCOMPLETE: "Incomplet",
+                NC_OR_NCG: "NC ou NCG"}
+
+NC_OR_NCG_NOTICE = "NC ou NCG : merci de vous référer au texte ANSM"
+NC_OR_NCG_DETAIL = (
+    "Nombre CT de l'eau égal à 25 UH en valeur absolue : la décision ANSM (point 9.1.7.3) "
+    "classe cette valeur à la fois en non-conformité et en non-conformité grave. "
+    "Merci de vous référer au texte de la décision."
+)
 
 # Metrics that can be trended, with their display label
 METRICS = [
@@ -109,6 +124,9 @@ class QCRun:
 
     @classmethod
     def from_dict(cls, data: dict) -> "QCRun":
+        """Build a run from its stored form; ValueError if it is not a usable run."""
+        if not isinstance(data, dict) or not isinstance(data.get("run_date"), str):
+            raise ValueError("contrôle sans date (run_date)")
         known = {f.name for f in fields(cls)} - {"is_current"}
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -144,8 +162,15 @@ def nps_bounds(ref_nps: float) -> tuple[float, float]:
 
 
 def water_ct_status(value: float) -> str:
+    # The decision lists 7 and 25 HU in both neighbouring tiers. At 7 its closing
+    # sentence ("inférieure ou égale à ±7 UH") settles it: conforme. At 25 nothing
+    # does, so that exact value gets a status of its own.
     v = abs(value)
-    return OK if v <= 7 else (NC if v <= 25 else NCG)
+    if v <= 7:
+        return OK
+    if abs(v - 25) <= _EPS:
+        return NC_OR_NCG
+    return NC if v < 25 else NCG
 
 
 def uniformity_status(value: float) -> str:
@@ -173,25 +198,70 @@ def artifacts_status(present: bool | None) -> str:
 
 
 def overall_status(statuses: list[str]) -> str:
+    """Verdict of a whole control.
+
+    A non-conformity stands whatever else is missing. Without one, a control is
+    only "conforme" when every test was judged: a test left pending (artifacts
+    not inspected, no reference value, no SPB) makes it incomplete.
+    """
     judged = [s for s in statuses if s != PENDING]
-    if NCG in judged:
-        return NCG
-    if NC in judged:
-        return NC
-    return OK if judged else PENDING
+    for worst in (NCG, NC_OR_NCG, NC):
+        if worst in judged:
+            return worst
+    if not judged:
+        return PENDING
+    return OK if len(judged) == len(statuses) else INCOMPLETE
+
+
+# What is missing when a test is pending, as printed on the report and asked
+# before an export
+PENDING_REASON = {
+    "water_ct": "nombre CT de l'eau non mesuré",
+    "uniformity": "uniformité non mesurée",
+    "noise": "stabilité du bruit non évaluée (valeur de référence absente)",
+    "nps_freq": "stabilité du SPB non évaluée (valeur de référence absente)",
+    "artifacts": "inspection visuelle des artéfacts non réalisée",
+}
+
+
+def evaluate_measurements(
+    water_ct: float | None,
+    uniformity: float | None,
+    noise: float | None,
+    nps_freq: float | None,
+    artifacts_present: bool | None,
+    ref_noise: float | None,
+    ref_nps_freq: float | None,
+) -> dict[str, str]:
+    """Status of each test plus ``overall``; a value of None is a test not done."""
+    s = {
+        "water_ct": PENDING if water_ct is None else water_ct_status(water_ct),
+        "uniformity": PENDING if uniformity is None else uniformity_status(uniformity),
+        "noise": PENDING if noise is None else noise_status(noise, ref_noise),
+        "nps_freq": nps_status(nps_freq, ref_nps_freq),
+        "artifacts": artifacts_status(artifacts_present),
+    }
+    s["overall"] = overall_status(list(s.values()))
+    return s
+
+
+def pending_reasons(statuses: dict[str, str], nps_measured: bool = True) -> list[str]:
+    """What keeps a control from being complete, one phrase per pending test."""
+    reasons = []
+    for key, text in PENDING_REASON.items():
+        if statuses.get(key) != PENDING:
+            continue
+        if key == "nps_freq" and not nps_measured:
+            text = "SPB non mesuré"
+        reasons.append(text)
+    return reasons
 
 
 def evaluate_run(run: QCRun) -> dict[str, str]:
     """Return the status of each test plus ``overall``."""
-    s = {
-        "water_ct": water_ct_status(run.water_ct),
-        "uniformity": uniformity_status(run.uniformity),
-        "noise": noise_status(run.noise, run.ref_noise),
-        "nps_freq": nps_status(run.nps_freq, run.ref_nps_freq),
-        "artifacts": artifacts_status(run.artifacts_present),
-    }
-    s["overall"] = overall_status(list(s.values()))
-    return s
+    return evaluate_measurements(
+        run.water_ct, run.uniformity, run.noise, run.nps_freq, run.artifacts_present,
+        run.ref_noise, run.ref_nps_freq)
 
 
 def tolerance_band(metric: str, ref_noise: float | None, ref_nps: float | None):

@@ -17,8 +17,9 @@ from cq_tdm import __version__
 
 from ..core import DicomImage, WaterPhantomResults, NPSResult, format_fr
 from ..core.qc_history import (
-    NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, dicom_date_to_iso, evaluate_run, iso_to_fr,
-    noise_bounds, noise_status, nps_status,
+    INCOMPLETE, NC, NC_OR_NCG, NC_OR_NCG_DETAIL, NC_OR_NCG_NOTICE, NCG, OK, PENDING, STATUS_SHORT,
+    QCRun, dicom_date_to_iso, evaluate_measurements, evaluate_run, iso_to_fr, noise_bounds,
+    noise_status, nps_status, pending_reasons, water_ct_status,
 )
 from ..core.trend_chart import LIGHT_PALETTE, render_trend_chart
 
@@ -111,6 +112,16 @@ def _action_text(acceptable: bool, ncg: bool) -> str:
         return "Arrêt de l'exploitation et signalement à l'ANSM et à l'ARS dont dépend l'exploitant dans un délai de 2 jours ouvrés dans le cadre du système national de matériovigilance"
     else:
         return "Remise en conformité dès que possible"
+
+
+def _water_ct_verdict(value: float) -> tuple[str, str, str]:
+    """(result text, paragraph style, required action) for a water CT number."""
+    status = water_ct_status(value)
+    if status == NC_OR_NCG:
+        return NC_OR_NCG_NOTICE, 'ResultNCG', NC_OR_NCG_DETAIL
+    acceptable, ncg = status == OK, status == NCG
+    style = 'ResultOK' if acceptable else ('ResultNCG' if ncg else 'ResultNC')
+    return _status_text(acceptable, ncg), style, _action_text(acceptable, ncg)
 
 
 def _status_color(acceptable: bool, ncg: bool) -> colors.Color:
@@ -495,6 +506,14 @@ class PDFReportGenerator:
             textColor=colors.red,
         ))
 
+        # A test that was not judged: neither a pass nor a failure
+        self.styles.add(ParagraphStyle(
+            name='ResultPending',
+            fontName=bold_font,
+            fontSize=10,
+            textColor=colors.Color(0.4, 0.4, 0.4),
+        ))
+
         self.styles.add(ParagraphStyle(
             name='Footer',
             fontName=base_font,
@@ -679,37 +698,33 @@ class PDFReportGenerator:
         nps_results: Optional[NPSResult],
         artifact_result: Optional[ArtifactInspectionResult],
     ) -> tuple[str, colors.Color, str]:
-        """Compute overall status, color, and required action."""
-        all_acceptable = True
-        any_ncg = False
+        """Compute overall status, color, and required action.
 
-        if water_results:
-            if not water_results.water_ct_acceptable:
-                all_acceptable = False
-                if water_results.water_ct_ncg:
-                    any_ncg = True
-            if not water_results.uniformity_acceptable:
-                all_acceptable = False  # no NCG tier for uniformity
-
-            # Noise stability check if reference available (same rule as the history)
-            if self.reference_noise is not None:
-                if noise_status(water_results.noise, self.reference_noise) != OK:
-                    all_acceptable = False
-
-        # NPS stability check if reference available
-        if nps_results and self.reference_nps_freq is not None and self.reference_nps_freq > 0:
-            if nps_status(nps_results.mean_frequency, self.reference_nps_freq) != OK:
-                all_acceptable = False
-
-        if artifact_result is not None and artifact_result.artifacts_present:
-            all_acceptable = False
-
-        if all_acceptable:
+        Same rule as the history (qc_history): "CONFORME" requires every test to
+        have been judged, so a control without artifact inspection or without
+        reference values is reported as incomplete, not as conforming.
+        """
+        statuses = evaluate_measurements(
+            water_results.water_ct_number if water_results else None,
+            water_results.uniformity if water_results else None,
+            water_results.noise if water_results else None,
+            nps_results.mean_frequency if nps_results else None,
+            artifact_result.artifacts_present if artifact_result is not None else None,
+            self.reference_noise,
+            self.reference_nps_freq,
+        )
+        overall = statuses["overall"]
+        if overall == OK:
             return "CONFORME", colors.Color(0, 0.6, 0), ""
-        elif any_ncg:
-            return "NON-CONFORMITÉ GRAVE", colors.red, "Arrêt de l'exploitation et signalement à l'ANSM et à l'ARS dont dépend l'exploitant dans un délai de 2 jours ouvrés dans le cadre du système national de matériovigilance"
-        else:
-            return "NON CONFORME", colors.orange, "Remise en conformité dès que possible"
+        if overall == NCG:
+            return "NON-CONFORMITÉ GRAVE", colors.red, _action_text(False, True)
+        if overall == NC_OR_NCG:
+            return "NC OU NCG", colors.red, NC_OR_NCG_DETAIL
+        if overall == NC:
+            return "NON CONFORME", colors.orange, _action_text(False, False)
+        reasons = pending_reasons(statuses, nps_measured=nps_results is not None)
+        return ("CONTRÔLE INCOMPLET", colors.Color(0.45, 0.45, 0.45),
+                "Conformité non établie : " + " ; ".join(reasons))
 
     def _build_equipment_section(self, image: DicomImage) -> list:
         """Build equipment information section."""
@@ -949,8 +964,8 @@ class PDFReportGenerator:
 
         if artifact_result is None:
             elements.append(Paragraph(
-                "Statut : Non inspecté",
-                self.styles['InfoText']
+                "Résultat : TEST NON RÉALISÉ — inspection visuelle des artéfacts à effectuer",
+                self.styles['ResultPending']
             ))
         else:
             if artifact_result.artifacts_present:
@@ -1034,11 +1049,11 @@ class PDFReportGenerator:
         for row, col, status in cell_status:
             if status == OK and col == 7:
                 style.append(('TEXTCOLOR', (col, row), (col, row), _status_color(True, False)))
-            elif status in (NC, NCG):
-                style.append(('TEXTCOLOR', (col, row), (col, row), _status_color(False, status == NCG)))
+            elif status in (NC, NCG, NC_OR_NCG):
+                style.append(('TEXTCOLOR', (col, row), (col, row), _status_color(False, status != NC)))
                 if col == 7:
                     style.append(('FONTNAME', (col, row), (col, row), 'Helvetica-Bold'))
-            elif status == PENDING:
+            elif status in (PENDING, INCOMPLETE):
                 style.append(('TEXTCOLOR', (col, row), (col, row), colors.grey))
         table.setStyle(TableStyle(style))
         elements.append(table)
@@ -1163,8 +1178,7 @@ class PDFReportGenerator:
 
         elements.append(Paragraph("Nombre CT de l'eau", self.styles['SectionTitle']))
 
-        status_text = _status_text(results.water_ct_acceptable, results.water_ct_ncg)
-        status_style = self._get_status_style(results.water_ct_acceptable, results.water_ct_ncg)
+        status_text, status_style, action = _water_ct_verdict(results.water_ct_number)
 
         data = [
             ["Valeur mesurée :", f"{format_fr(results.water_ct_number, 1, sign=True)} HU"],
@@ -1184,7 +1198,6 @@ class PDFReportGenerator:
         elements.append(table)
         elements.append(Spacer(1, 4))
         elements.append(Paragraph(f"Résultat : {status_text}", self.styles[status_style]))
-        action = _action_text(results.water_ct_acceptable, results.water_ct_ncg)
         if action:
             elements.append(Paragraph(f"<i>→ {action}</i>", self.styles[status_style]))
         elements.append(Spacer(1, 8))
@@ -1289,6 +1302,10 @@ class PDFReportGenerator:
             else:
                 elements.append(Paragraph("Résultat : NON CONFORME", self.styles['ResultNC']))
                 elements.append(Paragraph(f"<i>→ {_action_text(False, False)}</i>", self.styles['ResultNC']))
+        else:
+            elements.append(Spacer(1, 4))
+            elements.append(Paragraph("Résultat : NON ÉVALUÉ — valeur de référence absente",
+                                      self.styles['ResultPending']))
 
         elements.append(Spacer(1, 8))
 
@@ -1334,6 +1351,10 @@ class PDFReportGenerator:
             else:
                 elements.append(Paragraph("Résultat : NON CONFORME", self.styles['ResultNC']))
                 elements.append(Paragraph(f"<i>→ {_action_text(False, False)}</i>", self.styles['ResultNC']))
+        else:
+            elements.append(Spacer(1, 4))
+            elements.append(Paragraph("Résultat : NON ÉVALUÉ — valeur de référence absente",
+                                      self.styles['ResultPending']))
 
         elements.append(Spacer(1, 8))
 
@@ -1403,8 +1424,7 @@ class PDFReportGenerator:
 
         if water_results:
             # CT Number
-            ct_status = _status_text(water_results.water_ct_acceptable, water_results.water_ct_ncg)
-            ct_style = self._get_status_style(water_results.water_ct_acceptable, water_results.water_ct_ncg)
+            ct_status, ct_style, _ = _water_ct_verdict(water_results.water_ct_number)
             summary_lines.append(("Nombre CT de l'eau", f"{format_fr(water_results.water_ct_number, 1, sign=True)} HU", ct_status, ct_style))
 
             # Uniformity
@@ -1419,7 +1439,9 @@ class PDFReportGenerator:
                 noise_style = 'ResultOK' if noise_conforme else 'ResultNC'
                 summary_lines.append(("Bruit (stabilité)", f"{format_fr(water_results.noise, 2)} HU", noise_text, noise_style))
             else:
-                summary_lines.append(("Bruit", f"{format_fr(water_results.noise, 2)} HU", "—", 'InfoText'))
+                summary_lines.append(("Bruit",
+                                      f"{format_fr(water_results.noise, 2)} HU (référence absente)",
+                                      "NON ÉVALUÉ", 'ResultPending'))
 
         if nps_results:
             # NPS - with conformity check if reference value available
@@ -1429,7 +1451,11 @@ class PDFReportGenerator:
                 nps_style = 'ResultOK' if nps_conforme else 'ResultNC'
                 summary_lines.append(("SPB (stabilité)", f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm", nps_text, nps_style))
             else:
-                summary_lines.append(("SPB - Fréquence moyenne", f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm", "—", 'InfoText'))
+                nps_value = f"{format_fr(nps_results.mean_frequency, 3)} cycles/mm"
+                summary_lines.append(("SPB - Fréquence moyenne", f"{nps_value} (référence absente)",
+                                      "NON ÉVALUÉ", 'ResultPending'))
+        else:
+            summary_lines.append(("SPB", "non mesuré", "TEST NON RÉALISÉ", 'ResultPending'))
 
         if artifact_result is not None:
             if artifact_result.artifacts_present:
@@ -1439,6 +1465,9 @@ class PDFReportGenerator:
                 art_status = "CONFORME"
                 art_style = 'ResultOK'
             summary_lines.append(("Artéfacts", "Présence" if artifact_result.artifacts_present else "Absence", art_status, art_style))
+        else:
+            summary_lines.append(
+                ("Artéfacts", "non inspectés", "TEST NON RÉALISÉ", 'ResultPending'))
 
         # Create summary table
         if summary_lines:
@@ -1446,10 +1475,7 @@ class PDFReportGenerator:
                 line_parts = [
                     Paragraph(f"<b>{test_name}</b> : {value}", self.styles['InfoText']),
                 ]
-                if status != "—":
-                    line_parts.append(Paragraph(f" → {status}", self.styles[style]))
-                else:
-                    line_parts.append(Paragraph("", self.styles['InfoText']))
+                line_parts.append(Paragraph(f" → {status}", self.styles[style]))
 
                 row_table = Table([line_parts], colWidths=[8.5 * cm, 5.5 * cm])
                 row_table.setStyle(TableStyle([

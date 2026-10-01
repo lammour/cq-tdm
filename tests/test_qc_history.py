@@ -2,11 +2,14 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from cq_tdm.core.device_database import DeviceConfig, DeviceDatabase
 from cq_tdm.core.qc_history import (
+    INCOMPLETE,
     NC,
+    NC_OR_NCG,
     NCG,
     OK,
     PENDING,
@@ -14,7 +17,9 @@ from cq_tdm.core.qc_history import (
     dicom_date_to_iso,
     evaluate_run,
     noise_bounds,
+    pending_reasons,
     tolerance_band,
+    water_ct_status,
 )
 
 
@@ -31,8 +36,32 @@ def _run(**kw) -> QCRun:
 def test_water_ct_thresholds():
     assert evaluate_run(_run(water_ct=7.0))["water_ct"] == OK
     assert evaluate_run(_run(water_ct=-7.1))["water_ct"] == NC
-    assert evaluate_run(_run(water_ct=25.0))["water_ct"] == NC
-    assert evaluate_run(_run(water_ct=25.1))["water_ct"] == NCG
+    assert evaluate_run(_run(water_ct=24.999))["water_ct"] == NC
+    assert evaluate_run(_run(water_ct=25.001))["water_ct"] == NCG
+
+
+def test_water_ct_of_exactly_25_is_left_to_the_ansm_text():
+    """The decision puts ±25 HU in both tiers: neither NC nor NCG is asserted."""
+    from cq_tdm.core.water_phantom import ROIMeasurement, WaterPhantomResults
+    from cq_tdm.reports.pdf_report import PDFReportGenerator, _ensure_reportlab
+
+    for value in (25.0, -25.0):
+        st = evaluate_run(_run(water_ct=value))
+        assert st["water_ct"] == st["overall"] == NC_OR_NCG
+    # A sure NCG is not hidden by it, and it outranks a plain NC
+    assert evaluate_run(_run(water_ct=25.0, artifacts_present=True))["overall"] == NC_OR_NCG
+
+    _ensure_reportlab()
+    roi = ROIMeasurement("r", 0, 0, 5, 25.0, 2.0, 24.0, 26.0, 100)
+    results = WaterPhantomResults(central=roi, top=roi, right=roi, bottom=roi, left=roi,
+                                  water_ct_number=25.0, uniformity=0.0, noise=2.0)
+    gen = PDFReportGenerator()
+    status, _color, action = gen._compute_overall_status(results, None, None)
+    assert status == "NC OU NCG" and "9.1.7.3" in action
+    section = " | ".join(_cells(gen._build_ct_number_section(results)))
+    assert "NC ou NCG : merci de vous référer au texte ANSM" in section
+    summary = " | ".join(_cells(gen._build_summary_section(results, None, None)))
+    assert "NC ou NCG : merci de vous référer au texte ANSM" in summary
 
 
 def test_uniformity_threshold():
@@ -59,8 +88,40 @@ def test_overall_status_precedence():
     assert evaluate_run(_run())["overall"] == OK
     assert evaluate_run(_run(artifacts_present=True))["overall"] == NC
     assert evaluate_run(_run(water_ct=30, artifacts_present=True))["overall"] == NCG
-    assert evaluate_run(_run(ref_noise=None, ref_nps_freq=None, artifacts_present=None))["overall"] == OK
-    # Only the judged tests count: CT and uniformity are always judged
+    # "Conforme" requires every test to have been judged
+    assert evaluate_run(_run(artifacts_present=None))["overall"] == INCOMPLETE
+    assert evaluate_run(_run(ref_noise=None))["overall"] == INCOMPLETE
+    assert evaluate_run(_run(nps_freq=None))["overall"] == INCOMPLETE
+    # A non-conformity stands whatever else is missing
+    assert evaluate_run(_run(water_ct=10, artifacts_present=None))["overall"] == NC
+    assert evaluate_run(_run(water_ct=30, ref_noise=None))["overall"] == NCG
+
+
+def test_pending_reasons_name_what_is_missing():
+    st = evaluate_run(_run(ref_noise=None, artifacts_present=None))
+    assert pending_reasons(st) == [
+        "stabilité du bruit non évaluée (valeur de référence absente)",
+        "inspection visuelle des artéfacts non réalisée",
+    ]
+    assert pending_reasons(evaluate_run(_run())) == []
+    st = evaluate_run(_run(nps_freq=None))
+    assert pending_reasons(st, nps_measured=False) == ["SPB non mesuré"]
+
+
+def test_water_phantom_flags_follow_the_shared_criteria():
+    """The analysis must not carry its own copy of the ±7 / ±25 HU thresholds."""
+    from cq_tdm.core.water_phantom import analyze_water_phantom
+
+    from .test_phantom_detection import make_phantom
+
+    for offset, expected in ((0.0, OK), (12.0, NC), (40.0, NCG)):
+        image = make_phantom(noise_sigma=5.0)
+        water = np.abs(image.pixel_array) < 100
+        image.pixel_array[water] += offset
+        results = analyze_water_phantom(image)
+        assert water_ct_status(results.water_ct_number) == expected
+        assert results.water_ct_acceptable is (expected == OK)
+        assert results.water_ct_ncg is (expected == NCG)
 
 
 def test_tolerance_band():
@@ -120,6 +181,69 @@ def test_database_persists_runs_and_replaces_same_series(tmp_path):
     assert reloaded.delete_run(device.device_id, "A") is True
     assert reloaded.delete_run(device.device_id, "A") is False
     assert [r.series_uid for r in DeviceDatabase(db_path).get_device(device.device_id).runs] == ["B"]
+
+
+def test_unreadable_entries_do_not_hide_the_rest_and_survive_a_save(tmp_path):
+    db_path = tmp_path / "devices.json"
+    db = DeviceDatabase(db_path)
+    first, second = _device(), DeviceConfig.from_dicom("GE", "Revolution", "CT02", "999")
+    db.save_device(first)
+    db.save_device(second)
+    db.add_run(first.device_id, _run(series_uid="A"))
+
+    data = json.loads(db_path.read_text(encoding="utf-8"))
+    bad_run = {"series_uid": "B", "noise": 3.0}  # no run_date
+    bad_device = {"device_id": "x", "runs": {"not": "a list"}}
+    data["devices"][0]["runs"].append(bad_run)
+    data["devices"].append(bad_device)
+    db_path.write_text(json.dumps(data), encoding="utf-8")
+
+    reloaded = DeviceDatabase(db_path)
+    assert reloaded.load_error is None
+    assert {d.device_id for d in reloaded.get_all_devices()} == {first.device_id, second.device_id}
+    assert [r.series_uid for r in reloaded.get_device(first.device_id).runs] == ["A"]
+    assert len(reloaded.load_warnings) == 2
+    assert "1 contrôle illisible" in reloaded.load_warnings[0]
+    assert "installation n° 3 illisible" in reloaded.load_warnings[1]
+
+    # Saving must write the unread entries back, not drop them
+    reloaded.add_run(first.device_id, _run(series_uid="C", run_date="2026-05-01"))
+    saved = json.loads(db_path.read_text(encoding="utf-8"))
+    assert bad_run in saved["devices"][0]["runs"]
+    assert bad_device in saved["devices"]
+    assert not db_path.with_suffix(".json.bak").exists()
+
+
+def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
+    db_path = tmp_path / "devices.json"
+    db_path.write_text("{ not json", encoding="utf-8")
+    db = DeviceDatabase(db_path)
+    assert db.load_error and db.get_all_devices() == [] and db.load_warnings == []
+    assert db_path.with_suffix(".json.bak").read_text(encoding="utf-8") == "{ not json"
+
+
+def test_reexporting_a_series_keeps_its_corrective_action(tmp_path):
+    db = DeviceDatabase(tmp_path / "devices.json")
+    device = _device()
+    db.save_device(device)
+    recorded = _run(series_uid="A", water_ct=9.0)
+    db.add_run(device.device_id, recorded)
+    recorded.corrective_action_date, recorded.corrective_action = "2026-03-20", "recalibration"
+    db.update_run(device.device_id, recorded)
+
+    # Same series exported again (new PDF): the action entered meanwhile stays
+    again = _run(series_uid="A", water_ct=9.0, pdf_path="new.pdf")
+    assert db.add_run(device.device_id, again) is True
+    run = DeviceDatabase(db.db_path).get_device(device.device_id).runs[0]
+    assert (run.corrective_action_date, run.corrective_action) == ("2026-03-20", "recalibration")
+    assert run.pdf_path == "new.pdf"
+
+    # An action carried by the new run wins
+    newer = _run(series_uid="A", corrective_action_date="2026-04-02",
+                 corrective_action="tube remplacé")
+    db.add_run(device.device_id, newer)
+    run = DeviceDatabase(db.db_path).get_device(device.device_id).runs[0]
+    assert (run.corrective_action_date, run.corrective_action) == ("2026-04-02", "tube remplacé")
 
 
 def test_database_loads_version_1_file_without_runs(tmp_path):
@@ -224,8 +348,14 @@ def test_report_filename_uses_scan_date():
 
 def test_pdf_overall_status_matches_history_criteria():
     """The PDF badge must apply the same boundary rule (with epsilon) as evaluate_run."""
+    from types import SimpleNamespace
+
     from cq_tdm.core.water_phantom import ROIMeasurement, WaterPhantomResults
-    from cq_tdm.reports.pdf_report import PDFReportGenerator, _ensure_reportlab
+    from cq_tdm.reports.pdf_report import (
+        ArtifactInspectionResult,
+        PDFReportGenerator,
+        _ensure_reportlab,
+    )
 
     _ensure_reportlab()
 
@@ -238,16 +368,60 @@ def test_pdf_overall_status_matches_history_criteria():
     )
     assert not hasattr(results, "uniformity_ncg")
     # 2.2 - 2.0 is 0.20000000000000018 in floating point: still conforme, like the history
-    gen = PDFReportGenerator(reference_noise=2.0)
-    status, _color, _action = gen._compute_overall_status(results, None, None)
+    gen = PDFReportGenerator(reference_noise=2.0, reference_nps_freq=0.31)
+    nps = SimpleNamespace(mean_frequency=0.31)
+    no_artifact = ArtifactInspectionResult(artifacts_present=False)
+    status, _color, _action = gen._compute_overall_status(results, nps, no_artifact)
     assert status == "CONFORME"
     assert evaluate_run(_run(noise=2.2, ref_noise=2.0))["noise"] == OK
 
     # Uniformity above 25 HU is NC, never NCG
     results.uniformity, results.uniformity_acceptable = 30.0, False
-    status, _color, _action = gen._compute_overall_status(results, None, None)
+    status, _color, _action = gen._compute_overall_status(results, nps, no_artifact)
     assert status == "NON CONFORME"
     assert evaluate_run(_run(uniformity=30.0))["uniformity"] == NC
+
+
+def test_pdf_never_says_conforme_when_a_test_was_not_judged():
+    """No artifact inspection, no reference value or no SPB: the control is incomplete."""
+    from types import SimpleNamespace
+
+    from cq_tdm.core.water_phantom import ROIMeasurement, WaterPhantomResults
+    from cq_tdm.reports.pdf_report import (
+        ArtifactInspectionResult,
+        PDFReportGenerator,
+        _ensure_reportlab,
+    )
+
+    _ensure_reportlab()
+    roi = ROIMeasurement("r", 0, 0, 5, 0.0, 2.0, -1.0, 1.0, 100)
+    results = WaterPhantomResults(central=roi, top=roi, right=roi, bottom=roi, left=roi,
+                                  water_ct_number=0.0, uniformity=1.0, noise=2.0)
+    nps = SimpleNamespace(mean_frequency=0.31, num_slices=10)
+    inspected = ArtifactInspectionResult(artifacts_present=False)
+    complete = PDFReportGenerator(reference_noise=2.0, reference_nps_freq=0.31)
+
+    status, _color, action = complete._compute_overall_status(results, nps, None)
+    assert status == "CONTRÔLE INCOMPLET"
+    assert "inspection visuelle des artéfacts non réalisée" in action
+
+    status, _color, action = PDFReportGenerator()._compute_overall_status(results, nps, inspected)
+    assert status == "CONTRÔLE INCOMPLET"
+    assert "bruit" in action and "SPB" in action
+
+    status, _color, action = complete._compute_overall_status(results, None, inspected)
+    assert status == "CONTRÔLE INCOMPLET" and "SPB non mesuré" in action
+
+    # A non-conformity is reported as such even when something else is missing
+    results.water_ct_number = 30.0
+    status, _color, _action = complete._compute_overall_status(results, nps, None)
+    assert status == "NON-CONFORMITÉ GRAVE"
+    results.water_ct_number = 0.0
+
+    summary = " | ".join(_cells(PDFReportGenerator()._build_summary_section(results, nps, None)))
+    assert "(référence absente)" in summary and "NON ÉVALUÉ" in summary
+    assert "TEST NON RÉALISÉ" in summary
+    assert "CONFORME" in summary  # CT number and uniformity are still judged
 
 
 def test_scan_date_falls_back_when_study_date_is_blank():

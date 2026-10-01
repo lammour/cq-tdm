@@ -56,13 +56,16 @@ class DeviceConfig:
 
     # Recorded QC controls, newest last (see qc_history.QCRun)
     runs: list[QCRun] = field(default_factory=list)
+    # Entries of "runs" that could not be read (hand-edited file, other version):
+    # not shown, but written back untouched so that saving never destroys them
+    unreadable_runs: list = field(default_factory=list, compare=False)
 
-    _NESTED = ("runs", "roi_geometry")
+    _NESTED = ("runs", "roi_geometry", "unreadable_runs")
 
     def to_dict(self) -> dict:
         d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in self._NESTED}
         d["roi_geometry"] = self.roi_geometry.to_dict() if self.roi_geometry else None
-        d["runs"] = [r.to_dict() for r in self.runs]
+        d["runs"] = [r.to_dict() for r in self.runs] + list(self.unreadable_runs)
         return d
 
     @classmethod
@@ -71,7 +74,15 @@ class DeviceConfig:
         # Ignore unknown keys so a file written by a newer version still loads
         device = cls(**{k: v for k, v in data.items() if k in known})
         device.roi_geometry = ROIGeometry.from_dict(data.get("roi_geometry"))
-        device.runs = [QCRun.from_dict(r) for r in data.get("runs", []) if isinstance(r, dict)]
+        runs = data.get("runs") or []
+        if not isinstance(runs, list):
+            raise ValueError("liste des contrôles illisible")
+        # One bad run must not hide the installation and its other controls
+        for entry in runs:
+            try:
+                device.runs.append(QCRun.from_dict(entry))
+            except (TypeError, ValueError):
+                device.unreadable_runs.append(entry)
         return device
 
     def find_run(self, run_id: str) -> Optional[QCRun]:
@@ -171,6 +182,10 @@ class DeviceDatabase:
         # before any save so that a corrupt or newer-format database is never
         # silently overwritten with an empty one.
         self.load_error: str | None = None
+        # One message per entry that was skipped while the rest of the file loaded
+        self.load_warnings: list[str] = []
+        # Entries of "devices" that could not be read, written back untouched
+        self._unreadable_devices: list = []
         self._load()
 
     def _load(self):
@@ -181,9 +196,19 @@ class DeviceDatabase:
         try:
             with open(self.db_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for device_data in data.get("devices", []):
-                device = DeviceConfig.from_dict(device_data)
+            for i, device_data in enumerate(data.get("devices", []), start=1):
+                try:
+                    device = DeviceConfig.from_dict(device_data)
+                except (TypeError, ValueError, AttributeError) as e:
+                    self._unreadable_devices.append(device_data)
+                    self.load_warnings.append(f"installation n° {i} illisible ({e})")
+                    continue
                 self._devices[device.device_id] = device
+                if device.unreadable_runs:
+                    n = len(device.unreadable_runs)
+                    self.load_warnings.append(
+                        f"{device.display_name()} : {n} contrôle{'s' if n > 1 else ''} "
+                        f"illisible{'s' if n > 1 else ''}")
             self.folder_relocations = [
                 (str(r["old"]), str(r["new"]))
                 for r in data.get("folder_relocations", [])
@@ -192,6 +217,8 @@ class DeviceDatabase:
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
             self.load_error = f"{self.db_path}: {e}"
             self._devices = {}
+            self._unreadable_devices = []
+            self.load_warnings = []
             self._backup_unreadable_file()
 
     def _backup_unreadable_file(self):
@@ -206,7 +233,7 @@ class DeviceDatabase:
         """Save devices to the database file."""
         data = {
             "version": 2,
-            "devices": [d.to_dict() for d in self._devices.values()],
+            "devices": [d.to_dict() for d in self._devices.values()] + self._unreadable_devices,
             "folder_relocations": [{"old": o, "new": n} for o, n in self.folder_relocations],
         }
         # Write to a temporary file and swap it in, so that a crash or a full
@@ -250,12 +277,18 @@ class DeviceDatabase:
     def add_run(self, device_id: str, run: QCRun) -> bool:
         """Record a QC run for a device; a run with the same id (same series) is replaced.
 
+        The replaced run hands its corrective action over to the new one.
         Returns True when an existing run was replaced.
         """
         device = self._devices[device_id]
         replaced = False
         for i, existing in enumerate(device.runs):
             if existing.run_id == run.run_id:
+                # The corrective action was entered on the recorded control, after
+                # the fact: a new export of the series must not erase it
+                if not (run.corrective_action_date or run.corrective_action):
+                    run.corrective_action_date = existing.corrective_action_date
+                    run.corrective_action = existing.corrective_action
                 device.runs[i] = run
                 replaced = True
                 break
