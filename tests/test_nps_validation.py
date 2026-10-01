@@ -18,11 +18,21 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from cq_tdm import __version__
 from cq_tdm.core.dicom_loader import DicomSeries, load_dicom_folder
 from cq_tdm.core.nps import NPSROIConfig, analyze_nps
 
+# Acceptance of the validation against the iQMetrix-CT results of the ANSM image
+# bank. The software must be "equivalent" to the reference, so this is much
+# tighter than the ±10 % the decision allows for the stability of a scanner.
+MEAN_FREQUENCY_TOLERANCE_PCT = 2.0
+# RMS difference between our raw radial spectrum and the reference one, bin for
+# bin, as a percentage of the reference peak
+SPECTRUM_RMS_TOLERANCE_PCT = 3.0
+# Noise magnitude (mean σ of the SPB ROIs) against "Noise (HU)" of the reference
+NOISE_TOLERANCE_PCT = 1.0
 
 # ---------------------------------------------------------------------------
 # Reference Data Parsers
@@ -260,12 +270,7 @@ def create_comparison_plot(
     error_pct = compute_relative_error(our_mean_freq, ref_mean_freq)
 
     # Status indicator
-    if error_pct <= 5:
-        status = "✓ EXCELLENT"
-    elif error_pct <= 10:
-        status = "✓ PASS"
-    else:
-        status = "✗ FAIL"
+    status = "✓ PASS" if error_pct <= MEAN_FREQUENCY_TOLERANCE_PCT else "✗ FAIL"
 
     summary_text = f"""
     {series_name} - NPS Validation Results
@@ -280,9 +285,9 @@ def create_comparison_plot(
     ─────────────────────────────────────────────
     Relative Error:      {error_pct:6.2f}%  {status}
 
-    Acceptance Criteria (ANSM):
+    Acceptance Criterion:
     ─────────────────────────────────────────────
-    Regulatory Limit:    ≤10% deviation
+    Validation Limit:    ≤{MEAN_FREQUENCY_TOLERANCE_PCT:g}% deviation
     """
 
     ax2.text(
@@ -467,9 +472,19 @@ class TestNPSValidation:
         print(f"  Error:                {err_vs_iqmetrix:.2f}%")
         print(f"  Plot saved to:        {plot_path}")
 
-        # Assert within ANSM regulatory tolerance (10%)
-        assert err_vs_iqmetrix <= 10, (
-            f"{series_name}: Mean frequency error {err_vs_iqmetrix:.2f}% exceeds 10% "
+        # The analysis must run on the pixel size the reference was computed with
+        assert result.pixel_size_mm == pytest.approx(ref_config.pixel_size, abs=1e-3)
+
+        noise_err = compute_relative_error(result.noise, ref_results.noise)
+        print(f"  Noise: {result.noise:.4f} HU (reference {ref_results.noise:.4f}, {noise_err:.2f}%)")
+        assert noise_err <= NOISE_TOLERANCE_PCT, (
+            f"{series_name}: noise {result.noise:.4f} HU is {noise_err:.2f}% off the reference "
+            f"{ref_results.noise:.4f} HU (limit {NOISE_TOLERANCE_PCT:g}%)"
+        )
+
+        assert err_vs_iqmetrix <= MEAN_FREQUENCY_TOLERANCE_PCT, (
+            f"{series_name}: Mean frequency error {err_vs_iqmetrix:.2f}% exceeds "
+            f"{MEAN_FREQUENCY_TOLERANCE_PCT:g}% "
             f"(ours: {result.mean_frequency:.4f}, ref: {ref_results.average_frequency:.4f})"
         )
 
@@ -543,9 +558,16 @@ class TestNPSValidation:
         print(f"  Plot saved to:        {plot_path}")
         print(f"  ROIs saved to:        {roi_plot_path}")
 
-        # Assert within ANSM regulatory tolerance (10%)
-        assert err_vs_ref <= 10, (
-            f"{series_name}: Mean frequency error {err_vs_ref:.2f}% exceeds 10% "
+        noise_err = compute_relative_error(result.noise, ref_results.noise)
+        print(f"  Noise: {result.noise:.4f} HU (reference {ref_results.noise:.4f}, {noise_err:.2f}%)")
+        assert noise_err <= NOISE_TOLERANCE_PCT, (
+            f"{series_name}: noise {result.noise:.4f} HU is {noise_err:.2f}% off the reference "
+            f"{ref_results.noise:.4f} HU (limit {NOISE_TOLERANCE_PCT:g}%)"
+        )
+
+        assert err_vs_ref <= MEAN_FREQUENCY_TOLERANCE_PCT, (
+            f"{series_name}: Mean frequency error {err_vs_ref:.2f}% exceeds "
+            f"{MEAN_FREQUENCY_TOLERANCE_PCT:g}% "
             f"(ours: {result.mean_frequency:.4f}, ref: {ref_results.average_frequency:.4f})"
         )
 
@@ -556,10 +578,11 @@ class TestNPSValidation:
         series_name: str,
         output_dir: Path,
     ):
-        """Test that the 1D NPS spectrum shape matches reference.
+        """The raw radial spectrum must match the reference one bin for bin.
 
-        This test compares the full spectrum curve, not just mean frequency.
-        Uses interpolation to compare at matching frequency points.
+        Compared in absolute values (HU²·mm²), so the normalisation, the
+        frequency axis and the radial averaging are all covered, including the
+        bins beyond Nyquist.
         """
         # Load reference data
         ref_config = load_roi_config(series_dir)
@@ -581,39 +604,30 @@ class TestNPSValidation:
             roi_positions=ref_config.rois,
         )
 
-        # Interpolate our results to reference frequency points
-        our_nps_interp = np.interp(
-            ref_1d.frequencies,
-            result.frequencies_radial,
-            result.nps_radial,
-            left=0,
-            right=0,
+        # Same frequency axis: same number of rings, same step, same extent
+        np.testing.assert_allclose(
+            result.frequencies_radial, ref_1d.frequencies, rtol=1e-6, atol=1e-9
         )
 
-        # Compare in the relevant frequency range (exclude DC and high frequencies)
-        valid_mask = (ref_1d.frequencies > 0.05) & (ref_1d.frequencies < 1.0)
-        ref_valid = ref_1d.nps_1d_fit[valid_mask]
-        our_valid = our_nps_interp[valid_mask]
+        # The first rings are excluded: they depend on the detrending, which the
+        # reference software does not document
+        compared = ref_1d.frequencies > 0.05
+        difference = result.nps_radial[compared] - ref_1d.nps_1d_raw[compared]
+        peak = ref_1d.nps_1d_raw.max()
+        rms_pct = float(np.sqrt(np.mean(difference ** 2)) / peak * 100)
+        peak_error_pct = compute_relative_error(result.nps_radial.max(), peak)
 
-        # Normalize both curves by their maximum for shape comparison
-        if ref_valid.max() > 0 and our_valid.max() > 0:
-            ref_norm = ref_valid / ref_valid.max()
-            our_norm = our_valid / our_valid.max()
+        print(f"\n{series_name} - Raw spectrum vs reference:")
+        print(f"  RMS difference:  {rms_pct:.2f}% of the peak")
+        print(f"  Peak intensity:  {peak_error_pct:.2f}% off")
 
-            # Calculate correlation coefficient
-            correlation = np.corrcoef(ref_norm, our_norm)[0, 1]
-
-            # Calculate RMS error of normalized curves
-            rms_error = np.sqrt(np.mean((ref_norm - our_norm) ** 2))
-
-            print(f"\n{series_name} - Spectrum Shape Analysis:")
-            print(f"  Correlation:     {correlation:.4f}")
-            print(f"  RMS Error:       {rms_error:.4f}")
-
-            # Spectrum shape should be reasonably correlated
-            assert correlation > 0.7, (
-                f"{series_name}: Spectrum correlation {correlation:.4f} below 0.7"
-            )
+        assert rms_pct <= SPECTRUM_RMS_TOLERANCE_PCT, (
+            f"{series_name}: raw spectrum differs from the reference by {rms_pct:.2f}% "
+            f"of the peak (limit {SPECTRUM_RMS_TOLERANCE_PCT:g}%)"
+        )
+        assert peak_error_pct <= 5, (
+            f"{series_name}: peak intensity {peak_error_pct:.2f}% off the reference"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -685,25 +699,27 @@ def generate_combined_validation_figure(test_data_dir: Path, output_dir: Path) -
             "ref_freq": ref_results.average_frequency,
             "our_freq": result.mean_frequency,
             "error": error_pct,
+            "ref_noise": ref_results.noise,
+            "our_noise": result.noise,
+            "noise_error": compute_relative_error(result.noise, ref_results.noise),
         })
 
         # Create subplot (positions 1-5)
         ax = fig.add_subplot(2, 3, idx + 1)
 
-        # Plot reference (ANSM) - fitted curve only
+        # Raw radial spectra: the curves the mean frequency is computed on
         ax.plot(
             ref_1d.frequencies,
-            ref_1d.nps_1d_fit,
+            ref_1d.nps_1d_raw,
             "b-",
             linewidth=2,
             label="ANSM (reference)",
         )
 
-        # Plot our result (CQ-TDM auto ROI) - fitted curve only
         ax.plot(
             result.frequencies_radial,
-            result.nps_radial_fit,
-            "r-",
+            result.nps_radial,
+            "r--",
             linewidth=2,
             label="CQ TDM (auto ROI)",
         )
@@ -736,44 +752,55 @@ def generate_combined_validation_figure(test_data_dir: Path, output_dir: Path) -
     ax_table.axis("off")
 
     # Build table data
-    table_data = [["Series", "Reference\n(mm⁻¹)", "CQ TDM\n(mm⁻¹)", "Error\n(%)", "Status"]]
+    def passed(r: dict) -> bool:
+        return (r["error"] <= MEAN_FREQUENCY_TOLERANCE_PCT
+                and r["noise_error"] <= NOISE_TOLERANCE_PCT)
+
+    table_data = [["Series", "f ref.\n(mm⁻¹)", "f CQ TDM\n(mm⁻¹)", "Error\n(%)",
+                   "σ ref.\n(HU)", "σ CQ TDM\n(HU)", "Error\n(%)", "Status"]]
     for r in results_data:
-        status = "✓ PASS" if r["error"] <= 10 else "✗ FAIL"
         table_data.append([
             r["series"],
             f"{r['ref_freq']:.4f}",
             f"{r['our_freq']:.4f}",
             f"{r['error']:.2f}",
-            status,
+            f"{r['ref_noise']:.2f}",
+            f"{r['our_noise']:.2f}",
+            f"{r['noise_error']:.2f}",
+            "✓ PASS" if passed(r) else "✗ FAIL",
         ])
 
     # Add summary row
-    avg_error = sum(r["error"] for r in results_data) / len(results_data) if results_data else 0
-    table_data.append(["Average", "-", "-", f"{avg_error:.2f}", ""])
+    count = len(results_data) or 1
+    avg_error = sum(r["error"] for r in results_data) / count
+    avg_noise_error = sum(r["noise_error"] for r in results_data) / count
+    table_data.append(["Average", "-", "-", f"{avg_error:.2f}", "-", "-", f"{avg_noise_error:.2f}", ""])
 
+    columns = len(table_data[0])
     table = ax_table.table(
         cellText=table_data,
         loc="center",
         cellLoc="center",
-        colWidths=[0.2, 0.2, 0.2, 0.15, 0.15],
+        colWidths=[0.15, 0.13, 0.15, 0.1, 0.14, 0.17, 0.1, 0.13],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
+    table.set_fontsize(8)
     table.scale(1.2, 1.8)
 
     # Style header row
-    for j in range(5):
+    for j in range(columns):
         table[(0, j)].set_facecolor("#4472C4")
         table[(0, j)].set_text_props(color="white", fontweight="bold")
 
     # Style status column
     for i, r in enumerate(results_data, 1):
-        if r["error"] <= 10:
-            table[(i, 4)].set_facecolor("#C6EFCE")
-        else:
-            table[(i, 4)].set_facecolor("#FFC7CE")
+        table[(i, columns - 1)].set_facecolor("#C6EFCE" if passed(r) else "#FFC7CE")
 
-    ax_table.set_title("Mean Frequency Comparison\n(ANSM tolerance: ≤10%)", fontsize=11, fontweight="bold")
+    ax_table.set_title(
+        "Mean Frequency and Noise Comparison\n"
+        f"(validation criteria: frequency ≤{MEAN_FREQUENCY_TOLERANCE_PCT:g}%, "
+        f"noise ≤{NOISE_TOLERANCE_PCT:g}%)",
+        fontsize=11, fontweight="bold")
 
     plt.suptitle(f"NPS Validation: CQ TDM v{__version__} vs ANSM Reference", fontsize=14, fontweight="bold")
     plt.tight_layout()
@@ -969,15 +996,16 @@ def generate_combined_roi_figure(test_data_dir: Path, output_dir: Path) -> Path:
                 if results_data else 0)
     table_data.append(["Average", f"{avg_dist:.1f}", ""])
 
+    # The table takes the lower part of the cell so that the legend above it
+    # does not cover its header
     table = ax_summary.table(
         cellText=table_data,
-        loc="center",
         cellLoc="center",
         colWidths=[0.3, 0.3, 0.25],
+        bbox=[0.0, 0.0, 1.0, 0.68],
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1.2, 1.8)
 
     # Style header row
     for j in range(3):

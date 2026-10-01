@@ -20,6 +20,9 @@ from .roi_geometry import ROIGeometry
 # frozen executables to keep them small.
 _trapezoid = getattr(np, "trapezoid", None) or getattr(np, "trapz")
 
+# The 1D spectrum extends to 1.375 × Nyquist, as in the iQMetrix-CT reference data
+RADIAL_EXTENT = 1.375
+
 
 @dataclass
 class NPSROIPosition:
@@ -127,12 +130,12 @@ class NPSResult:
     frequencies_y: np.ndarray
 
     # 1D radial NPS
-    nps_radial: np.ndarray  # Radially averaged NPS (raw)
-    nps_radial_fit: np.ndarray  # Radially averaged NPS (11th order poly fit)
-    frequencies_radial: np.ndarray  # Frequencies up to Nyquist
+    nps_radial: np.ndarray  # Ring-averaged NPS (raw)
+    nps_radial_fit: np.ndarray  # Smoothed curve (11th order poly fit); not used for any result
+    frequencies_radial: np.ndarray  # Frequencies up to 1.375 × Nyquist
 
     # Summary metrics
-    mean_frequency: float  # Mean frequency (centroid) of fitted NPS (cycles/mm)
+    mean_frequency: float  # Mean frequency (centroid) of the raw radial NPS (cycles/mm)
     average_nps: float  # Average NPS value
     total_noise_power: float  # Integral of NPS
 
@@ -153,10 +156,19 @@ class NPSResult:
     # ROI geometry the positions were built from (None when positions were given)
     geometry: Optional[ROIGeometry] = None
 
+    # Noise magnitude of the control (ANSM 9.1.7.2: "déterminer le SPB et le
+    # bruit sur l'ensemble des 10 coupes"): the standard deviation of the HU
+    # values is taken in every NPS ROI of every slice, and these are averaged
+    # (8 ROIs on 10 slices: mean of 80 standard deviations). Same value as
+    # "Noise (HU)" of the iQMetrix-CT reference results.
+    noise: float = 0.0
+    noise_roi_count: int = 0  # number of standard deviations averaged
+
     def to_dict(self) -> dict:
         """Convert to dictionary for reporting."""
         return {
             "mean_frequency": self.mean_frequency,
+            "noise": self.noise,
             "average_nps": self.average_nps,
             "total_noise_power": self.total_noise_power,
             "num_slices": self.num_slices,
@@ -295,82 +307,66 @@ def radial_average(
     num_bins: int = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute radially averaged 1D NPS using angular profile method.
+    Reduce the 2D NPS to a 1D radial NPS by averaging over rings.
 
-    Matches iQMetrix reference implementation:
-    - Extract radial profiles at 37 angles (0° to 360° in 10° steps)
-    - Use bilinear interpolation along each profile
-    - Average all profiles to get 1D NPS
+    Every sample of the 2D spectrum is taken at its own distance r (in samples)
+    from the zero frequency. Ring k collects the samples with k ≤ r < k + 1,
+    is averaged over the samples that exist, and is assigned the frequency
+    k / (N · pixel size).
+
+    This is the convention that reproduces the iQMetrix-CT reference spectra
+    of the ANSM image bank bin for bin, including beyond Nyquist where only
+    the corners of the 2D spectrum hold data. The samples of ring k sit on
+    average near k + 0.5, so the curve is shifted towards low frequencies by a
+    fraction of a bin compared with a radius-exact labelling; this is part of
+    the reference method and must not be "corrected" (see README).
 
     Args:
-        nps_2d: 2D NPS matrix.
-        freq_x: X frequency axis.
-        freq_y: Y frequency axis.
-        pixel_size_mm: Pixel size in mm for Nyquist calculation.
-        num_bins: Number of output points (default: FFT_size/2 per iQMetrix).
+        nps_2d: 2D NPS matrix (square, zero frequency at index N // 2).
+        freq_x: X frequency axis (unused, kept for the call signature).
+        freq_y: Y frequency axis (unused, kept for the call signature).
+        pixel_size_mm: Pixel size in mm.
+        num_bins: Number of rings (default: up to 1.375 × Nyquist, as iQMetrix).
 
     Returns:
         Tuple of (nps_radial, frequencies_radial).
     """
-    from scipy import ndimage
-
     rows, cols = nps_2d.shape
     if rows != cols:
         raise ValueError(f"NPS array must be square, got {rows}x{cols}")
     fft_size = rows
 
-    # Calculate Nyquist frequency
-    nyquist = 1.0 / (2.0 * pixel_size_mm)
-
-    # iQMetrix extends to 1.375 × Nyquist (covers diagonal of 2D frequency space)
-    # Reference data consistently shows max_freq / Nyquist = 1.375 for all series
-    freq_max = nyquist * 1.375
-
-    # Number of bins: reference uses int(fft_size/2 * 1.375) + 1 = 45 for fft_size=64
-    # This maintains consistent frequency resolution when extending beyond Nyquist
+    # iQMetrix extends to 1.375 × Nyquist (into the corners of the 2D spectrum):
+    # int(N/2 × 1.375) + 1 rings, 45 for a 64 px ROI
     if num_bins is None:
-        num_bins = int(fft_size // 2 * 1.375) + 1
+        num_bins = int(fft_size // 2 * RADIAL_EXTENT) + 1
 
-    # Frequency vector
-    freq_r = np.linspace(0, freq_max, num_bins)
+    # After fftshift the zero frequency is at index N // 2 on both axes
+    center = fft_size // 2
+    row_idx, col_idx = np.indices(nps_2d.shape)
+    ring = np.floor(np.hypot(row_idx - center, col_idx - center)).astype(int)
 
-    # Center of 2D NPS (after fftshift, center is at (FFT_size/2+1, FFT_size/2+1) in 1-indexed MATLAB)
-    # In 0-indexed Python: (FFT_size//2, FFT_size//2)
-    center_row = fft_size // 2
-    center_col = fft_size // 2
+    inside = ring < num_bins
+    sums = np.bincount(ring[inside], weights=nps_2d[inside], minlength=num_bins)
+    counts = np.bincount(ring[inside], minlength=num_bins)
+    nps_r = np.divide(sums, counts, out=np.zeros(num_bins), where=counts > 0)
 
-    # Profile length in pixels - extend to 1.375 × edge to match frequency range
-    # This allows sampling beyond Nyquist into the corners of 2D frequency space
-    r_pixels = int(fft_size // 2 * 1.375)
-
-    # Angles for profile extraction (0 to 360 degrees in 10 degree steps)
-    # iQMetrix: theta = 0:10:360 -> 37 angles
-    theta_deg = np.arange(0, 361, 10)
-    theta_rad = np.deg2rad(theta_deg)
-
-    # Extract radial profiles at each angle using bilinear interpolation
-    radial_profiles = []
-
-    for theta in theta_rad:
-        # Create points along the radial line from center to edge
-        # r goes from 0 to r_pixels
-        r_values = np.linspace(0, r_pixels, num_bins)
-
-        # Calculate (row, col) coordinates along this line
-        row_coords = center_row + r_values * np.sin(theta)
-        col_coords = center_col + r_values * np.cos(theta)
-
-        # Extract profile using bilinear interpolation (map_coordinates)
-        # Note: map_coordinates uses (row, col) order
-        coords = np.array([row_coords, col_coords])
-        profile = ndimage.map_coordinates(nps_2d, coords, order=1, mode='constant', cval=0)
-        radial_profiles.append(profile)
-
-    # Average all radial profiles
-    radial_profiles = np.array(radial_profiles)
-    nps_r = np.mean(radial_profiles, axis=0)
+    # Exact for any ROI size: one ring is one sample of the 2D spectrum wide
+    freq_r = np.arange(num_bins) / (fft_size * pixel_size_mm)
 
     return nps_r, freq_r
+
+
+def mean_frequency_of(frequencies: np.ndarray, nps_values: np.ndarray) -> float:
+    """Mean frequency of a 1D NPS: centroid ∫f·NPS(f)df / ∫NPS(f)df of the raw curve.
+
+    Same rule as iQMetrix-CT ("Average Frequency"): computed on the raw radial
+    spectrum over its whole range, not on the polynomial fit.
+    """
+    total_power = _trapezoid(nps_values, frequencies)
+    if total_power <= 0:
+        return 0.0
+    return float(_trapezoid(frequencies * nps_values, frequencies) / total_power)
 
 
 def fit_nps_polynomial(
@@ -381,12 +377,14 @@ def fit_nps_polynomial(
     """
     Fit polynomial to 1D NPS curve.
 
-    Uses 11th degree polynomial as per ANSM/iQMetrix reference method.
+    11th degree polynomial, as the "fit" column of the iQMetrix reference data.
+    It is a smoothed curve for display and comparison only: the mean frequency
+    is computed on the raw spectrum (see mean_frequency_of).
 
     Args:
         frequencies: Frequency values (mm^-1).
         nps_values: Raw NPS values.
-        degree: Polynomial degree (default 11 per ANSM).
+        degree: Polynomial degree (default 11, as iQMetrix).
 
     Returns:
         Fitted NPS values at the same frequency points.
@@ -646,23 +644,18 @@ def analyze_nps(
                     message=f"ROI {roi_idx + 1}, coupe {slice_idx + 1}: {'; '.join(warnings_for_roi)}"
                 ))
 
+    # Noise: mean of the standard deviations of the ROIs (before detrending)
+    noise = float(np.mean([s[3] for s in roi_stats]))
+
     # Average NPS across all ROIs and slices
     nps_avg = nps_sum / total_roi_count
 
-    # Compute radial average
+    # Ring average, then the mean frequency on the raw radial spectrum
     nps_radial, freq_radial = radial_average(nps_avg, freq_x, freq_y, pixel_size)
+    mean_frequency = mean_frequency_of(freq_radial, nps_radial)
 
-    # Apply 11th degree polynomial fit (per ANSM/iQMetrix method)
+    # Smoothed curve, for display and comparison with the reference fit only
     nps_radial_fit = fit_nps_polynomial(freq_radial, nps_radial, degree=11)
-
-    # Compute mean frequency (centroid of FITTED NPS curve)
-    # f_mean = ∫ f * NPS(f) df / ∫ NPS(f) df
-    # Use trapezoid integration for better accuracy
-    total_power = _trapezoid(nps_radial_fit, freq_radial)
-    if total_power > 0:
-        mean_frequency = _trapezoid(freq_radial * nps_radial_fit, freq_radial) / total_power
-    else:
-        mean_frequency = 0.0
 
     # Compute summary metrics
     average_nps = np.mean(nps_radial)
@@ -704,6 +697,8 @@ def analyze_nps(
         roi_warnings=roi_warnings,
         skipped_rois=sorted(skipped_rois),
         geometry=geometry,
+        noise=noise,
+        noise_roi_count=len(roi_stats),
     )
 
 
@@ -719,6 +714,7 @@ def format_nps_results_text(result: NPSResult) -> str:
         f"Taille pixel: {result.pixel_size_mm:.3f} mm",
         "",
         "RÉSULTATS",
+        f"  Bruit: {result.noise:.2f} HU (moyenne de {result.noise_roi_count} écarts-types)",
         f"  Fréquence moyenne: {result.mean_frequency:.3f} cycles/mm",
         f"  NPS moyen: {result.average_nps:.2f} HU²·mm²",
         f"  Puissance totale: {result.total_noise_power:.2f} HU²",

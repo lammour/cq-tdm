@@ -54,7 +54,7 @@ def test_water_ct_of_exactly_25_is_left_to_the_ansm_text():
     _ensure_reportlab()
     roi = ROIMeasurement("r", 0, 0, 5, 25.0, 2.0, 24.0, 26.0, 100)
     results = WaterPhantomResults(central=roi, top=roi, right=roi, bottom=roi, left=roi,
-                                  water_ct_number=25.0, uniformity=0.0, noise=2.0)
+                                  water_ct_number=25.0, uniformity=0.0)
     gen = PDFReportGenerator()
     status, _color, action = gen._compute_overall_status(results, None, None)
     assert status == "NC OU NCG" and "9.1.7.3" in action
@@ -106,6 +106,48 @@ def test_pending_reasons_name_what_is_missing():
     assert pending_reasons(evaluate_run(_run())) == []
     st = evaluate_run(_run(nps_freq=None))
     assert pending_reasons(st, nps_measured=False) == ["SPB non mesuré"]
+
+
+def test_run_without_noise_measurement_is_incomplete():
+    """A control whose SPB could not be computed has no noise value."""
+    st = evaluate_run(_run(noise=None, nps_freq=None))
+    assert st["noise"] == PENDING and st["overall"] == INCOMPLETE
+    assert pending_reasons(st, nps_measured=False, noise_measured=False) == [
+        "bruit non mesuré", "SPB non mesuré"]
+    assert QCRun.from_dict(_run(noise=None).to_dict()).noise is None
+
+
+def test_pdf_noise_is_the_mean_sigma_of_the_spb_rois():
+    """The report judges the noise measured in the SPB ROIs, not the central ROI."""
+    from types import SimpleNamespace
+
+    from cq_tdm.core.water_phantom import ROIMeasurement, WaterPhantomResults
+    from cq_tdm.reports.pdf_report import (
+        ArtifactInspectionResult,
+        PDFReportGenerator,
+        _ensure_reportlab,
+    )
+
+    _ensure_reportlab()
+    central = ROIMeasurement("r", 0, 0, 5, 0.0, 9.0, -1.0, 1.0, 100)  # σ central: 9 HU
+    results = WaterPhantomResults(central=central, top=central, right=central, bottom=central,
+                                  left=central, water_ct_number=0.0, uniformity=0.0)
+    nps = SimpleNamespace(mean_frequency=0.31, num_slices=10, noise=8.0, noise_roi_count=80)
+    gen = PDFReportGenerator(reference_noise=8.0, reference_nps_freq=0.31)
+
+    # 9 HU against a reference of 8 would be out of tolerance: 8 HU is judged
+    status, _color, _action = gen._compute_overall_status(
+        results, nps, ArtifactInspectionResult(artifacts_present=False))
+    assert status == "CONFORME"
+
+    section = " | ".join(_cells(gen._build_noise_section(results, nps)))
+    assert "8,00 HU" in section
+    assert "moyenne des écarts-types de 80 ROI du SPB (10 coupes)" in section
+    assert "9,00 HU (coupe UH, pour information)" in section
+    assert "CONFORME" in section
+
+    missing = " | ".join(_cells(gen._build_noise_section(results, None)))
+    assert "non mesuré (SPB non calculé)" in missing and "TEST NON RÉALISÉ" in missing
 
 
 def test_water_phantom_flags_follow_the_shared_criteria():
@@ -364,12 +406,12 @@ def test_pdf_overall_status_matches_history_criteria():
 
     results = WaterPhantomResults(
         central=roi(0.0), top=roi(1.0), right=roi(1.0), bottom=roi(1.0), left=roi(1.0),
-        water_ct_number=0.0, uniformity=1.0, noise=2.2,
+        water_ct_number=0.0, uniformity=1.0,
     )
     assert not hasattr(results, "uniformity_ncg")
     # 2.2 - 2.0 is 0.20000000000000018 in floating point: still conforme, like the history
     gen = PDFReportGenerator(reference_noise=2.0, reference_nps_freq=0.31)
-    nps = SimpleNamespace(mean_frequency=0.31)
+    nps = SimpleNamespace(mean_frequency=0.31, noise=2.2)
     no_artifact = ArtifactInspectionResult(artifacts_present=False)
     status, _color, _action = gen._compute_overall_status(results, nps, no_artifact)
     assert status == "CONFORME"
@@ -396,8 +438,8 @@ def test_pdf_never_says_conforme_when_a_test_was_not_judged():
     _ensure_reportlab()
     roi = ROIMeasurement("r", 0, 0, 5, 0.0, 2.0, -1.0, 1.0, 100)
     results = WaterPhantomResults(central=roi, top=roi, right=roi, bottom=roi, left=roi,
-                                  water_ct_number=0.0, uniformity=1.0, noise=2.0)
-    nps = SimpleNamespace(mean_frequency=0.31, num_slices=10)
+                                  water_ct_number=0.0, uniformity=1.0)
+    nps = SimpleNamespace(mean_frequency=0.31, num_slices=10, noise=2.0, noise_roi_count=80)
     inspected = ArtifactInspectionResult(artifacts_present=False)
     complete = PDFReportGenerator(reference_noise=2.0, reference_nps_freq=0.31)
 
@@ -409,8 +451,10 @@ def test_pdf_never_says_conforme_when_a_test_was_not_judged():
     assert status == "CONTRÔLE INCOMPLET"
     assert "bruit" in action and "SPB" in action
 
+    # Without SPB analysis neither the frequency nor the noise is measured
     status, _color, action = complete._compute_overall_status(results, None, inspected)
-    assert status == "CONTRÔLE INCOMPLET" and "SPB non mesuré" in action
+    assert status == "CONTRÔLE INCOMPLET"
+    assert "SPB non mesuré" in action and "bruit non mesuré" in action
 
     # A non-conformity is reported as such even when something else is missing
     results.water_ct_number = 30.0

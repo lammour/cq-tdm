@@ -652,7 +652,8 @@ class PDFReportGenerator:
         if water_results:
             story.append(KeepTogether(self._build_ct_number_section(water_results)))
             story.append(KeepTogether(self._build_uniformity_section(water_results)))
-            story.append(KeepTogether(self._build_noise_section(water_results)))
+        if water_results or nps_results:
+            story.append(KeepTogether(self._build_noise_section(water_results, nps_results)))
 
         # NPS results (without graph)
         if nps_results:
@@ -707,7 +708,7 @@ class PDFReportGenerator:
         statuses = evaluate_measurements(
             water_results.water_ct_number if water_results else None,
             water_results.uniformity if water_results else None,
-            water_results.noise if water_results else None,
+            nps_results.noise if nps_results else None,
             nps_results.mean_frequency if nps_results else None,
             artifact_result.artifacts_present if artifact_result is not None else None,
             self.reference_noise,
@@ -722,7 +723,8 @@ class PDFReportGenerator:
             return "NC OU NCG", colors.red, NC_OR_NCG_DETAIL
         if overall == NC:
             return "NON CONFORME", colors.orange, _action_text(False, False)
-        reasons = pending_reasons(statuses, nps_measured=nps_results is not None)
+        reasons = pending_reasons(statuses, nps_measured=nps_results is not None,
+                                  noise_measured=nps_results is not None)
         return ("CONTRÔLE INCOMPLET", colors.Color(0.45, 0.45, 0.45),
                 "Conformité non établie : " + " ; ".join(reasons))
 
@@ -1023,7 +1025,7 @@ class PDFReportGenerator:
                 f"{format_fr(run.kvp, 0)} / {format_fr(run.mas, 0)}" if run.kvp else "—",
                 f"{format_fr(run.water_ct, 1, sign=True)} HU",
                 f"{format_fr(run.uniformity, 1)} HU",
-                f"{format_fr(run.noise, 2)} HU",
+                "—" if run.noise is None else f"{format_fr(run.noise, 2)} HU",
                 "—" if run.nps_freq is None else f"{format_fr(run.nps_freq, 3)}",
                 {None: "—", False: "Absents", True: "Présents"}[run.artifacts_present],
                 STATUS_SHORT[st["overall"]],
@@ -1262,29 +1264,67 @@ class PDFReportGenerator:
 
         return elements
 
-    def _build_noise_section(self, results: WaterPhantomResults) -> list:
-        """Build noise section."""
+    def _build_noise_section(
+        self,
+        water_results: Optional[WaterPhantomResults],
+        nps_results: Optional[NPSResult],
+    ) -> list:
+        """Build noise section.
+
+        The noise of the control is the mean of the standard deviations of the
+        SPB ROIs over the analysed slices (decision, point 9.1.7.2); the
+        standard deviation of the central ROI is printed for information.
+        """
         elements = []
 
         elements.append(Paragraph("Bruit", self.styles['SectionTitle']))
 
+        central_row = None
+        if water_results:
+            central_row = ["Écart-type ROI centrale :",
+                           f"{format_fr(water_results.central.std_hu, 2)} HU (coupe UH, pour information)"]
+
+        if nps_results is None:
+            data = [["Bruit :", "non mesuré (SPB non calculé)"]]
+            if central_row:
+                data.append(central_row)
+            table = Table(data, colWidths=[5 * cm, 9 * cm])
+            table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 4))
+            elements.append(Paragraph("Résultat : TEST NON RÉALISÉ", self.styles['ResultPending']))
+            elements.append(Spacer(1, 8))
+            return elements
+
+        noise = nps_results.noise
         data = [
-            ["Écart-type central :", f"{format_fr(results.noise, 2)} HU"],
+            ["Bruit :", f"{format_fr(noise, 2)} HU"],
+            ["Mesure :", f"moyenne des écarts-types de {nps_results.noise_roi_count} ROI du SPB "
+                         f"({nps_results.num_slices} coupe{'s' if nps_results.num_slices > 1 else ''})"],
         ]
 
         # Add stability comparison if reference value is available
         is_conforme = None
         if self.reference_noise is not None:
-            deviation = results.noise - self.reference_noise
+            deviation = noise - self.reference_noise
             # ANSM criterion: MIN(-0.2, -0.1*B_ref) ≤ (B_i - B_ref) ≤ MAX(0.2, 0.1*B_ref)
             lower_bound, upper_bound = noise_bounds(self.reference_noise)
-            is_conforme = noise_status(results.noise, self.reference_noise) == OK
+            is_conforme = noise_status(noise, self.reference_noise) == OK
 
             data.append(["Valeur de référence :", f"{format_fr(self.reference_noise, 2)} HU"])
             data.append(["Écart :", f"{format_fr(deviation, 2, sign=True)} HU"])
             data.append(["Critère :", f"[{format_fr(lower_bound, 2, sign=True)}, {format_fr(upper_bound, 2, sign=True)}] HU"])
 
-        table = Table(data, colWidths=[4 * cm, 10 * cm])
+        if central_row:
+            data.append(central_row)
+
+        table = Table(data, colWidths=[5 * cm, 9 * cm])
         table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
@@ -1432,16 +1472,18 @@ class PDFReportGenerator:
             unif_style = self._get_status_style(water_results.uniformity_acceptable, False)
             summary_lines.append(("Uniformité", f"{format_fr(water_results.uniformity, 1)} HU", unif_status, unif_style))
 
-            # Noise - with conformity check if reference value available
-            if self.reference_noise is not None:
-                noise_conforme = noise_status(water_results.noise, self.reference_noise) == OK
-                noise_text = "CONFORME" if noise_conforme else "NON CONFORME"
-                noise_style = 'ResultOK' if noise_conforme else 'ResultNC'
-                summary_lines.append(("Bruit (stabilité)", f"{format_fr(water_results.noise, 2)} HU", noise_text, noise_style))
-            else:
-                summary_lines.append(("Bruit",
-                                      f"{format_fr(water_results.noise, 2)} HU (référence absente)",
-                                      "NON ÉVALUÉ", 'ResultPending'))
+        # Noise (measured in the SPB ROIs) - with conformity check if reference value available
+        if nps_results is None:
+            summary_lines.append(("Bruit", "non mesuré", "TEST NON RÉALISÉ", 'ResultPending'))
+        elif self.reference_noise is not None:
+            noise_conforme = noise_status(nps_results.noise, self.reference_noise) == OK
+            noise_text = "CONFORME" if noise_conforme else "NON CONFORME"
+            noise_style = 'ResultOK' if noise_conforme else 'ResultNC'
+            summary_lines.append(("Bruit (stabilité)", f"{format_fr(nps_results.noise, 2)} HU", noise_text, noise_style))
+        else:
+            summary_lines.append(("Bruit",
+                                  f"{format_fr(nps_results.noise, 2)} HU (référence absente)",
+                                  "NON ÉVALUÉ", 'ResultPending'))
 
         if nps_results:
             # NPS - with conformity check if reference value available

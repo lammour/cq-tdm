@@ -3,7 +3,10 @@
 Implements tests according to ANSM decision of 18/12/2025:
 - Water CT number (exactitude and stability)
 - Uniformity
-- Noise (standard deviation)
+
+The noise magnitude of the control is not measured here: it comes from the NPS
+ROIs over the analysed slices (NPSResult.noise). The standard deviation of the
+central ROI (``central.std_hu``) is only shown for information.
 
 ROI specifications:
 - Central ROI: 40% of phantom diameter
@@ -88,7 +91,6 @@ class WaterPhantomResults:
     # Derived metrics
     water_ct_number: float = 0.0  # Mean of central ROI
     uniformity: float = 0.0  # Max deviation between central and peripheral
-    noise: float = 0.0  # Standard deviation (central or mean of all)
 
     # Acceptance criteria results
     water_ct_acceptable: bool = True  # Within ±7 HU
@@ -108,7 +110,6 @@ class WaterPhantomResults:
         return {
             "water_ct_number": self.water_ct_number,
             "uniformity": self.uniformity,
-            "noise": self.noise,
             "central_mean": self.central.mean_hu,
             "central_std": self.central.std_hu,
             "top_mean": self.top.mean_hu,
@@ -266,9 +267,6 @@ def analyze_water_phantom(
     deviations = [abs(m - water_ct) for m in peripheral_means]
     uniformity = max(deviations)
 
-    # Noise: standard deviation of central ROI
-    noise = central.std_hu
-
     # Acceptance criteria (ANSM decision of 18/12/2025): one definition, shared
     # with the history and the report (qc_history)
     # (exactly ±25 HU is neither flag: read water_ct_status() for the verdict)
@@ -288,7 +286,6 @@ def analyze_water_phantom(
         left=left,
         water_ct_number=water_ct,
         uniformity=uniformity,
-        noise=noise,
         water_ct_acceptable=water_ct_acceptable,
         water_ct_ncg=water_ct_ncg,
         uniformity_acceptable=uniformity_acceptable,
@@ -313,7 +310,7 @@ def format_results_text(results: WaterPhantomResults) -> str:
         f"  Statut: {'✓ CONFORME' if results.uniformity_acceptable else '✗ NON CONFORME'}",
         "",
         "BRUIT",
-        f"  Écart-type central: {results.noise:.2f} HU",
+        f"  Écart-type central: {results.central.std_hu:.2f} HU",
         "",
         "DÉTAIL PAR ROI",
         f"  Centre:  {results.central.mean_hu:+6.1f} ± {results.central.std_hu:.1f} HU ({results.central.num_pixels} px)",

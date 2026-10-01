@@ -2117,6 +2117,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         return (parse_float_fr(ref_noise_text) if ref_noise_text else None,
                 parse_float_fr(ref_nps_text) if ref_nps_text else None)
 
+    def _measured_noise(self) -> float | None:
+        """Noise of the control on screen: mean σ of the SPB ROIs; None without SPB analysis."""
+        return self._nps_results.noise if self._nps_results is not None else None
+
     def _current_statuses(self) -> dict[str, str]:
         """Status of each test of the control on screen, plus ``overall`` (same rule as the PDF)."""
         r = self._current_results
@@ -2124,7 +2128,7 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         return evaluate_measurements(
             r.water_ct_number if r else None,
             r.uniformity if r else None,
-            r.noise if r else None,
+            self._measured_noise(),
             self._nps_results.mean_frequency if self._nps_results else None,
             self._artifact_result,
             ref_noise,
@@ -2138,7 +2142,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         completes the control or exports it knowingly.
         """
         statuses = self._current_statuses()
-        missing = pending_reasons(statuses, nps_measured=self._nps_results is not None)
+        missing = pending_reasons(statuses, nps_measured=self._nps_results is not None,
+                                  noise_measured=self._nps_results is not None)
         if not missing:
             return True
         text = "Ce contrôle est incomplet :\n\n" + "\n".join(f"• {m}" for m in missing)
@@ -2686,7 +2691,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             kernel=img.convolution_kernel if img is not None else "",
             water_ct=self._current_results.water_ct_number,
             uniformity=self._current_results.uniformity,
-            noise=self._current_results.noise,
+            noise=self._measured_noise(),
             nps_freq=self._nps_results.mean_frequency if self._nps_results is not None else None,
             artifacts_present=self._artifact_result,
             artifacts_description=self._artifact_description if self._artifact_result else "",
@@ -2770,6 +2775,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _apply_reference_from_history(self, run: QCRun):
         """Make a past run's noise and SPB frequency the device reference values."""
+        if run.noise is None:
+            QMessageBox.information(
+                self, "Valeurs de référence",
+                f"Le contrôle du {run.date_fr()} ne comporte pas de mesure du bruit "
+                "(SPB non calculé) : il ne peut pas servir de référence.")
+            return
         self._confirm_and_set_references(run.noise, run.nps_freq,
                                          f"contrôle du {run.date_fr()}",
                                          geometry=self._run_geometry(run))
@@ -2811,8 +2822,13 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 "Aucune analyse effectuée : lancez l'analyse avant de définir "
                 "les valeurs actuelles comme références.")
             return
-        nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
-        self._confirm_and_set_references(self._current_results.noise, nps_freq,
+        if self._nps_results is None:
+            QMessageBox.information(
+                self, "Valeurs de référence",
+                "Le bruit et la fréquence moyenne sont mesurés dans les ROI du SPB : "
+                "l'analyse du SPB doit avoir abouti pour définir les valeurs de référence.")
+            return
+        self._confirm_and_set_references(self._nps_results.noise, self._nps_results.mean_frequency,
                                          "analyse en cours",
                                          geometry=self._run_geometry(self._current_run_for_history()))
 
@@ -3064,13 +3080,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             </table>
         </div>
 
-        <div class="section">
-            <div class="section-title">Bruit</div>
-            <table>
-                <tr><th>Écart-type central</th><td class="value">{format_fr(r.noise, 2)} HU</td></tr>
-                {self._format_noise_stability_html(r.noise)}
-            </table>
-        </div>
+        {self._format_noise_html()}
 
         <div class="section">
             <div class="section-title">Détail par ROI</div>
@@ -3086,6 +3096,32 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             </table>
             <table>
                 {self._format_roi_geometry_html()}
+            </table>
+        </div>
+        """
+
+    def _format_noise_html(self) -> str:
+        """Noise section: mean σ of the SPB ROIs over the analysed slices (ANSM 9.1.7.2)."""
+        central = ""
+        if self._current_results is not None:
+            central = (f'<tr><th>Écart-type ROI centrale</th><td class="value">'
+                       f'{format_fr(self._current_results.central.std_hu, 2)} HU '
+                       f'<span class="pending">(coupe UH, pour information)</span></td></tr>')
+        n = self._nps_results
+        if n is None:
+            rows = ('<tr><th>Bruit (ROI du SPB)</th>'
+                    '<td class="pending">Mesuré avec le SPB (non disponible)</td></tr>')
+        else:
+            rows = (f'<tr><th>Bruit (ROI du SPB)</th><td class="value">{format_fr(n.noise, 2)} HU</td></tr>'
+                    f'<tr><th>Mesure</th><td>moyenne des écarts-types de {n.noise_roi_count} ROI '
+                    f'({n.num_slices} coupe{"s" if n.num_slices > 1 else ""})</td></tr>'
+                    + self._format_noise_stability_html(n.noise))
+        return f"""
+        <div class="section">
+            <div class="section-title">Bruit</div>
+            <table>
+                {rows}
+                {central}
             </table>
         </div>
         """
@@ -3468,7 +3504,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             refs.append(f"f SPB réf. {format_fr(ref_nps, 3)} c/mm")
         if refs:
             ref_line = " · ".join(refs)
-        elif self._current_results is not None:
+        elif self._current_results is not None and self._nps_results is not None:
             # Offer the one-click first-control shortcut where the gap is noticed
             ref_line = (f'<span style="color:{c["warning_border"]};">Valeurs de référence non '
                         f'renseignées</span> — <a href="set-reference" style="color:{c["accent"]};">'
@@ -3623,10 +3659,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _current_analysis_for_reference(self) -> tuple[float, float | None, ROIGeometry | None] | None:
         """(noise, SPB frequency, frozen ROI geometry) of the analysis on screen, None if none."""
-        if self._current_results is None:
-            return None
-        nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
-        return (self._current_results.noise, nps_freq,
+        if self._current_results is None or self._nps_results is None:
+            return None  # noise and frequency both come from the SPB ROIs
+        return (self._nps_results.noise, self._nps_results.mean_frequency,
                 self._run_geometry(self._current_run_for_history()))
 
     def _after_device_manager(self, dialog: DeviceManagerDialog):

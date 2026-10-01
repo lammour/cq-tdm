@@ -70,7 +70,11 @@ class QCRun:
     # Measurements
     water_ct: float = 0.0
     uniformity: float = 0.0
-    noise: float = 0.0
+    # Mean of the standard deviations of the NPS ROIs over the analysed slices
+    # (NPSResult.noise); None when the NPS could not be computed. Runs recorded
+    # by versions up to 0.7 hold the standard deviation of the central ROI of
+    # the HU slice instead (7-9 % higher on the ANSM series).
+    noise: float | None = 0.0
     nps_freq: float | None = None
     artifacts_present: bool | None = None
     artifacts_description: str = ""
@@ -245,7 +249,8 @@ def evaluate_measurements(
     return s
 
 
-def pending_reasons(statuses: dict[str, str], nps_measured: bool = True) -> list[str]:
+def pending_reasons(statuses: dict[str, str], nps_measured: bool = True,
+                    noise_measured: bool = True) -> list[str]:
     """What keeps a control from being complete, one phrase per pending test."""
     reasons = []
     for key, text in PENDING_REASON.items():
@@ -253,6 +258,8 @@ def pending_reasons(statuses: dict[str, str], nps_measured: bool = True) -> list
             continue
         if key == "nps_freq" and not nps_measured:
             text = "SPB non mesuré"
+        elif key == "noise" and not noise_measured:
+            text = "bruit non mesuré"
         reasons.append(text)
     return reasons
 
