@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+    # The figures PR opened by the NPS validation workflow only touches these
+    # images: nothing to test, and main is tested again once it is merged.
+    paths-ignore:
+      - 'docs/*.png'
   workflow_dispatch:
 
 jobs:
