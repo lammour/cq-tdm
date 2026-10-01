@@ -1,6 +1,16 @@
 """Pytest fixtures for CQ TDM tests."""
 
+import sys
 from pathlib import Path
+
+if sys.platform.startswith("linux"):
+    # Same workaround as cq_tdm.main: matplotlib's FreeType binding must be loaded
+    # before Qt (pytest-qt imports it at configure time), otherwise every figure
+    # with text fails with "FT_Render_Glyph ... raster overflow".
+    try:
+        import matplotlib.ft2font  # noqa: F401
+    except Exception:
+        pass
 
 import pytest
 
@@ -14,8 +24,12 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 
 @pytest.fixture(scope="session")
 def test_data_dir() -> Path:
-    """Return the test data directory path."""
-    assert TEST_DATA_DIR.exists(), f"Test data directory not found: {TEST_DATA_DIR}"
+    """Return the test data directory path; tests needing it are skipped without it.
+
+    The ANSM reference series are not in the repository (see nps-validation.yml).
+    """
+    if not TEST_DATA_DIR.exists():
+        pytest.skip(f"ANSM reference series not available: {TEST_DATA_DIR}")
     return TEST_DATA_DIR
 
 

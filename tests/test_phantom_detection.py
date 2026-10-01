@@ -5,8 +5,6 @@ the phantom, so the detected radius must be the water/wall boundary, not the
 outer edge of the wall.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 

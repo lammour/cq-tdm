@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from cq_tdm.core.device_database import DeviceConfig, DeviceDatabase
-from cq_tdm.core.dicom_loader import DicomImage
 from cq_tdm.core.nps import analyze_nps, calculate_nps_roi_positions
 from cq_tdm.core.qc_history import QCRun
 from cq_tdm.core.roi_geometry import ROIGeometry

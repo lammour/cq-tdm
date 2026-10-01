@@ -262,13 +262,10 @@ def create_comparison_plot(
     # Status indicator
     if error_pct <= 5:
         status = "✓ EXCELLENT"
-        color = "green"
     elif error_pct <= 10:
         status = "✓ PASS"
-        color = "orange"
     else:
         status = "✗ FAIL"
-        color = "red"
 
     summary_text = f"""
     {series_name} - NPS Validation Results
