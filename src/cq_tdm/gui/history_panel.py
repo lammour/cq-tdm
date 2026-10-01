@@ -238,7 +238,7 @@ class HistoryPanel(QWidget):
                 (format_fr(run.mas, 0) if run.mas else "—", None),
                 (format_fr(run.water_ct, 1, sign=True), st["water_ct"]),
                 (format_fr(run.uniformity, 1), st["uniformity"]),
-                (format_fr(run.noise, 2), st["noise"]),
+                ("—" if run.noise is None else format_fr(run.noise, 2), st["noise"]),
                 ("—" if run.nps_freq is None else format_fr(run.nps_freq, 3), st["nps_freq"]),
                 ({None: "—", False: "Absents", True: "Présents"}[run.artifacts_present], st["artifacts"]),
                 (STATUS_SHORT[st["overall"]], st["overall"]),
@@ -261,7 +261,8 @@ class HistoryPanel(QWidget):
                     item.setToolTip(run.notes)
                 if status == INCOMPLETE:
                     item.setToolTip("Contrôle incomplet : " + " ; ".join(
-                        pending_reasons(st, nps_measured=run.nps_freq is not None)))
+                        pending_reasons(st, nps_measured=run.nps_freq is not None,
+                                        noise_measured=run.noise is not None)))
                 elif status == NC_OR_NCG:
                     item.setToolTip(NC_OR_NCG_DETAIL)
                 self._table.setItem(r, c, item)
@@ -367,7 +368,8 @@ class HistoryPanel(QWidget):
             "",
             f"Nombre CT de l'eau : {format_fr(run.water_ct, 1, sign=True)} HU — {STATUS_SHORT[st['water_ct']]}",
             f"Uniformité : {format_fr(run.uniformity, 1)} HU — {STATUS_SHORT[st['uniformity']]}",
-            f"Bruit σ : {format_fr(run.noise, 2)} HU (réf. {ref_n}) — {STATUS_SHORT[st['noise']]}",
+            f"Bruit σ : {'—' if run.noise is None else format_fr(run.noise, 2)} HU (réf. {ref_n}) "
+            f"— {STATUS_SHORT[st['noise']]}",
             f"Fréq. SPB : {nps} c/mm (réf. {ref_f}) — {STATUS_SHORT[st['nps_freq']]}",
             f"Artéfacts : {STATUS_SHORT[st['artifacts']]}"
             + (f" — {run.artifacts_description}" if run.artifacts_description else ""),
@@ -404,7 +406,8 @@ class HistoryPanel(QWidget):
                 st = evaluate_run(run)
                 w.writerow([
                     run.run_date, run.kvp, run.mas, run.water_ct, run.uniformity,
-                    run.noise, "" if run.ref_noise is None else run.ref_noise,
+                    "" if run.noise is None else run.noise,
+                    "" if run.ref_noise is None else run.ref_noise,
                     "" if run.nps_freq is None else run.nps_freq,
                     "" if run.ref_nps_freq is None else run.ref_nps_freq,
                     "" if run.artifacts_present is None else int(run.artifacts_present),

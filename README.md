@@ -14,10 +14,10 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
 - **Analyse du fantôme d'eau** :
   - Nombre CT de l'eau
   - Uniformité
-  - Constance de la magnitude du bruit
+  - Constance de la magnitude du bruit, mesurée dans les ROI du SPB sur l'ensemble des coupes analysées
 - **Spectre de Puissance du Bruit (SPB/NPS)** :
-  - Calcul du SPB 1D avec ajustement polynomial de degré 11
-  - Calcul de la fréquence moyenne
+  - Calcul du SPB 2D puis du SPB radial 1D (moyenne par couronnes)
+  - Calcul de la fréquence moyenne sur le spectre radial brut
   - Affichage du spectre
 - **Gestion des ROI** :
   - Détection automatique du fantôme (bord interne de la paroi) et placement des ROI ; les ROI périphériques ont leur bord externe à 12,5 mm de la paroi interne
@@ -52,7 +52,20 @@ L'auteur s'efforce à ne pas changer les méthodes de calcul entre chaque versio
 
 La décision ANSM ne précise pas les détails de la méthode de calcul du SPB. CQ TDM a pour objectif de se rapprocher au plus près de la méthode utilisée par [IQMetrix-CT](https://github.com/SFPM/iQMetrix-CT) et des résultats de référence disponibles sur le site de l'ANSM.
 
-Un protocole de test automatisé est disponible avec le code source du logiciel. Il compare les résultats du calcul de la fréquence moyenne du SPB avec les références fournies par l'ANSM. Il peut être exécuté avec pytest : 
+Méthode de calcul :
+
+- 8 ROI carrées sur chacune des coupes analysées ; soustraction d'un polynôme 2D d'ordre 2 à chaque ROI
+- SPB 2D de chaque ROI : `(taille du pixel)² / (nombre de pixels) × |FFT 2D|²`, sans fenêtrage, puis moyenne des spectres de toutes les ROI et de toutes les coupes
+- SPB radial 1D : moyenne par couronnes. La couronne k regroupe les points du SPB 2D dont la distance à la fréquence nulle est comprise entre k et k + 1 pas de fréquence ; elle est affectée à la fréquence `k / (N × taille du pixel)`, N étant le côté de la ROI en pixels. Le spectre s'étend jusqu'à 1,375 × la fréquence de Nyquist
+- Fréquence moyenne : centroïde du spectre radial brut, `∫ f·SPB(f) df / ∫ SPB(f) df`, sur toute l'étendue du spectre
+
+- Bruit : écart-type des nombres CT dans chaque ROI du SPB de chaque coupe analysée, puis moyenne de ces écarts-types (8 ROI sur 10 coupes : moyenne de 80 écarts-types), conformément au point 9.1.7.2 de la décision (« déterminer le SPB et le bruit sur l'ensemble des 10 coupes »). L'écart-type de la ROI centrale de la coupe UH est affiché à titre d'information
+
+Cette convention reproduit les spectres de référence d'IQMetrix-CT point par point. Elle affecte chaque couronne à son bord inférieur : la fréquence moyenne obtenue est donc légèrement inférieure à celle que donnerait un calcul au rayon exact de chaque point (de 2 à 4 % sur les séries de référence). C'est un choix d'équivalence avec la référence ANSM.
+
+**Depuis la version qui a introduit cette méthode, le bruit et la fréquence moyenne ne sont pas comparables à ceux des versions 0.7 et antérieures** : la fréquence moyenne est plus basse de 2 à 4 % environ, et le bruit, auparavant mesuré dans la ROI centrale d'une seule coupe, est plus bas de 7 à 9 % sur les séries de référence. Les valeurs de référence du bruit et du SPB doivent être redéfinies au premier contrôle.
+
+Un protocole de test automatisé est disponible avec le code source du logiciel. Il compare la fréquence moyenne (écart toléré : 2 %), le bruit (écart toléré : 1 %) et le spectre radial, point par point, avec les références fournies par l'ANSM. Il peut être exécuté avec pytest : 
 
 ```bash
 # Lancer les tests de validation SPB
