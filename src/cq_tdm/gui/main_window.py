@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QRegularExpression, QDate
 from PySide6.QtGui import QShortcut, QKeySequence, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
+    QScrollArea,
     QDateEdit,
     QMainWindow,
     QWidget,
@@ -67,6 +68,18 @@ UNKNOWN_INSTALL_LABEL = "Installation inconnue"         # series loaded, not rec
 NEW_INSTALL_LABEL = "Nouvelle installation"
 EDIT_INSTALL_LABEL = "Modifier…"
 
+# Register of operations items (ANSM decision, point 3.2.2) only the operator
+# knows: (DeviceConfig attribute, label, placeholder)
+REGISTER_FIELDS = (
+    ("phantom_brand", "Fantôme, marque :", "ex. Pro-Project, PTW…"),
+    ("phantom_model", "Fantôme, modèle :", "ex. fantôme d'eau 20 cm"),
+    ("phantom_serial", "Fantôme, n° de série :", ""),
+    ("clinical_protocol_origin", "Protocole clinique d'origine :",
+     "Protocole clinique dont le protocole de CQ est issu"),
+    ("reconstruction_algorithm", "Algorithme de reconstruction :",
+     "Algorithme et niveau du protocole de CQ, ex. iDose niveau 3"),
+)
+
 
 # The theme palette lives in gui/theme.py so the image viewer shares it
 _theme_colors = theme_colors
@@ -76,15 +89,49 @@ from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 
 class DeviceManagerDialog(QDialog):
-    """Dialog for managing saved CT installations."""
+    """The one window where installations are created, edited and deleted.
 
-    def __init__(self, device_db: DeviceDatabase, parent=None):
+    Opened from "Modifier…" next to the installation selector and from the
+    Configuration menu. It does not need an image: coordinates, reference
+    values and register items are edited for any saved installation. When an
+    image is loaded, the installation matching it can be created from its
+    DICOM identity, and the slices chosen in the viewer can be recorded.
+    """
+
+    def __init__(
+        self,
+        device_db: DeviceDatabase,
+        parent=None,
+        select_device_id: str | None = None,
+        current_image: DicomImage | None = None,
+        current_slices: tuple[int, int, int] | None = None,
+        current_analysis: tuple[float, float | None, ROIGeometry | None] | None = None,
+    ):
         super().__init__(parent)
         self.device_db = device_db
+        self.current_image = current_image
+        self.current_slices = current_slices  # (hu, nps_start, nps_end), 0-based
+        # (noise, SPB mean frequency or None, ROI geometry or None) of the
+        # analysis on screen, offered as reference values
+        self.current_analysis = current_analysis
         self.setWindowTitle("Gestion des installations")
-        self.setMinimumSize(750, 550)
+        self.setMinimumSize(860, 600)
+        self.resize(960, 780)
         self._setup_ui()
-        self._refresh_device_list()
+        self._refresh_device_list(select_device_id)
+
+    @property
+    def selected_device_id(self) -> str | None:
+        """Id of the installation selected in the list, None if none."""
+        return self._current_device.device_id if self._current_device else None
+
+    def _image_device_id(self) -> str | None:
+        """Id a device for the loaded image would have (saved or not)."""
+        img = self.current_image
+        if img is None:
+            return None
+        return DeviceConfig.generate_id(img.manufacturer or "", img.model_name or "",
+                                        img.station_name or "", img.device_serial_number or "")
 
     def _setup_ui(self):
         """Set up the dialog UI."""
@@ -135,13 +182,18 @@ class DeviceManagerDialog(QDialog):
         self._device_list.currentItemChanged.connect(self._on_device_selected)
         left_layout.addWidget(self._device_list)
 
+        # New installation from the loaded image (its DICOM identity is the id)
+        self._btn_new_from_image = QPushButton("Nouvelle installation depuis l'image chargée")
+        self._btn_new_from_image.clicked.connect(self._create_from_image)
+        left_layout.addWidget(self._btn_new_from_image)
+
         # Delete button
         self._btn_delete = QPushButton("Supprimer l'installation")
         self._btn_delete.setEnabled(False)
         self._btn_delete.clicked.connect(self._delete_selected_device)
         left_layout.addWidget(self._btn_delete)
 
-        layout.addWidget(left_panel, 1)
+        layout.addWidget(left_panel, 2)
 
         # Right panel - device details (editable)
         right_panel = QWidget()
@@ -187,13 +239,38 @@ class DeviceManagerDialog(QDialog):
         ref_label.setStyleSheet("font-weight: bold;")
         form_layout.addRow(ref_label)
 
+        # Digits and one decimal separator (dot or comma) only: a locale-aware
+        # QDoubleValidator rewrites "4,52" as "452" outside a French locale
+        ref_validator = QRegularExpressionValidator(QRegularExpression(r"\d*[.,]?\d*"))
         self._edit_ref_noise = QLineEdit()
         self._edit_ref_noise.setPlaceholderText("Bruit de référence (HU)")
+        self._edit_ref_noise.setValidator(ref_validator)
         form_layout.addRow("Bruit réf. (σ) :", self._edit_ref_noise)
 
         self._edit_ref_nps_freq = QLineEdit()
         self._edit_ref_nps_freq.setPlaceholderText("Fréquence moyenne SPB (cycles/mm)")
+        self._edit_ref_nps_freq.setValidator(ref_validator)
         form_layout.addRow("Fréq. SPB réf. :", self._edit_ref_nps_freq)
+
+        # First control: the measured values are what later controls compare to
+        self._btn_ref_from_analysis = QPushButton("Définir les valeurs actuelles comme références")
+        self._btn_ref_from_analysis.clicked.connect(self._set_references_from_analysis)
+        form_layout.addRow("", self._btn_ref_from_analysis)
+
+        # Register of operations (ANSM 3.2.2): printed on every report
+        form_layout.addRow(QLabel(""))  # Spacer
+        register_label = QLabel("Registre des opérations :")
+        register_label.setStyleSheet("font-weight: bold;")
+        register_label.setToolTip(
+            "Informations exigées dans le registre des opérations (décision ANSM, point 3.2.2), "
+            "reprises dans chaque rapport")
+        form_layout.addRow(register_label)
+        self._edit_register: dict[str, QLineEdit] = {}
+        for attr, label, placeholder in REGISTER_FIELDS:
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            form_layout.addRow(label, edit)
+            self._edit_register[attr] = edit
 
         # DICOM identification (read-only)
         form_layout.addRow(QLabel(""))  # Spacer
@@ -213,6 +290,14 @@ class DeviceManagerDialog(QDialog):
         self._label_station.setStyleSheet("color: #888;")
         form_layout.addRow("Station :", self._label_station)
 
+        self._label_dicom_serial = QLabel("—")
+        self._label_dicom_serial.setStyleSheet("color: #888;")
+        form_layout.addRow("N° série DICOM :", self._label_dicom_serial)
+
+        self._label_runs = QLabel("—")
+        self._label_runs.setStyleSheet("color: #888;")
+        form_layout.addRow("Contrôles enregistrés :", self._label_runs)
+
         # Saved slice positions (read-only)
         form_layout.addRow(QLabel(""))  # Spacer
         slices_label = QLabel("Positions des coupes :")
@@ -227,32 +312,92 @@ class DeviceManagerDialog(QDialog):
         self._label_nps_range.setStyleSheet("color: #888;")
         form_layout.addRow("Plage SPB :", self._label_nps_range)
 
-        right_layout.addWidget(form)
-        right_layout.addStretch()
+        # The slices are chosen in the viewer; record the current choice here
+        self._btn_adopt_slices = QPushButton("Mémoriser les coupes actuelles")
+        self._btn_adopt_slices.clicked.connect(self._adopt_current_slices)
+        form_layout.addRow("", self._btn_adopt_slices)
+
+        # Frozen ROI geometry (read-only): sizes and positions every control reuses
+        form_layout.addRow(QLabel(""))  # Spacer
+        geometry_label = QLabel("Géométrie des ROI :")
+        geometry_label.setStyleSheet("font-weight: bold; color: #888;")
+        geometry_label.setToolTip(
+            "Tailles et positions des ROI, figées lors du contrôle de référence et réutilisées "
+            "à l'identique aux contrôles suivants (seul le centre du fantôme est redétecté)")
+        form_layout.addRow(geometry_label)
+        self._labels_geometry: dict[str, QLabel] = {}
+        for key, title in (("state", "État :"), ("format", "Format d'image :"),
+                           ("central", "ROI centrale :"), ("peripheral", "ROI périphériques :"),
+                           ("nps", "ROI SPB :")):
+            label = QLabel("—")
+            label.setStyleSheet("color: #888;")
+            label.setWordWrap(True)
+            form_layout.addRow(title, label)
+            self._labels_geometry[key] = label
+        self._btn_reset_geometry = QPushButton("Réinitialiser la géométrie des ROI")
+        self._btn_reset_geometry.setToolTip(
+            "Oublier les tailles et positions figées, par exemple après un changement de protocole "
+            "(matrice, champ de vue) : elles seront recalculées puis figées à nouveau lors de la "
+            "prochaine définition des valeurs de référence ou du prochain contrôle enregistré")
+        self._btn_reset_geometry.clicked.connect(self._reset_roi_geometry)
+        form_layout.addRow("", self._btn_reset_geometry)
+
+        # The form can outgrow a small screen: scroll it vertically only, the
+        # fields follow the width of the window
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(form)
+        right_layout.addWidget(scroll, 1)
 
         # Save button
         self._btn_save = QPushButton("Enregistrer les modifications")
         self._btn_save.setEnabled(False)
         self._btn_save.clicked.connect(self._save_current_device)
         right_layout.addWidget(self._btn_save)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+        right_layout.addWidget(self._status_label)
 
-        layout.addWidget(right_panel, 1)
+        layout.addWidget(right_panel, 3)
 
         # Store current device
         self._current_device: DeviceConfig | None = None
 
-    def _refresh_device_list(self):
-        """Refresh the device list."""
+    def _refresh_device_list(self, select_device_id: str | None = None):
+        """Rebuild the device list, selecting `select_device_id` when given."""
+        image_id = self._image_device_id()
+        self._device_list.blockSignals(True)
         self._device_list.clear()
         devices = self.device_db.get_all_devices()
-
-        for device in devices:
-            item = QListWidgetItem(device.display_name())
+        selected_row = -1
+        for row, device in enumerate(devices):
+            label = device.display_name()
+            if device.device_id == image_id:
+                label += "   (image chargée)"
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, device.device_id)
             self._device_list.addItem(item)
-
-        if not devices:
+            if device.device_id == select_device_id:
+                selected_row = row
+        self._device_list.blockSignals(False)
+        if selected_row >= 0:
+            self._device_list.setCurrentRow(selected_row)
+            self._on_device_selected(self._device_list.currentItem(), None)
+        else:
+            self._current_device = None
             self._clear_form()
+        # Creating the image's installation is the thing to do when it is missing
+        can_create = image_id is not None and self.device_db.get_device(image_id) is None
+        self._btn_new_from_image.setEnabled(can_create)
+        self._btn_new_from_image.setStyleSheet(primary_button_style() if can_create else "")
+        self._btn_new_from_image.setToolTip(
+            "Créer l'installation du scanner dont une série est chargée "
+            "(identifiée par fabricant, modèle, station et n° de série DICOM)"
+            if self.current_image is not None else
+            "Chargez une série DICOM pour créer l'installation de son scanner")
 
     def _on_device_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
         """Handle device selection."""
@@ -274,6 +419,40 @@ class DeviceManagerDialog(QDialog):
 
     def _load_device_to_form(self, device: DeviceConfig):
         """Load device data into the form."""
+        self._status_label.setText("")
+        for attr, edit in self._edit_register.items():
+            edit.setText(getattr(device, attr, "") or "")
+        # The analysis on screen can only become the reference of its own scanner
+        can_reference = self.current_analysis is not None and device.device_id == self._image_device_id()
+        self._btn_ref_from_analysis.setEnabled(can_reference)
+        if can_reference:
+            noise, nps_freq, _geometry = self.current_analysis
+            values = f"σ {format_fr(noise, 2)} HU"
+            if nps_freq is not None:
+                values += f" · f SPB {format_fr(nps_freq, 3)} c/mm"
+            self._btn_ref_from_analysis.setToolTip(
+                f"Reprendre les valeurs de l'analyse en cours ({values}) comme valeurs de référence "
+                "de cette installation et figer la géométrie des ROI de ce contrôle")
+            # No reference yet: this is the thing to do
+            no_reference = device.reference_noise is None and device.reference_nps_freq is None
+            self._btn_ref_from_analysis.setStyleSheet(primary_button_style() if no_reference else "")
+        else:
+            self._btn_ref_from_analysis.setStyleSheet("")
+            self._btn_ref_from_analysis.setToolTip(
+                "Chargez et analysez une série de cette installation pour reprendre ses valeurs")
+        # Slices can only be recorded for the installation the loaded series belongs to
+        can_adopt = self.current_slices is not None and device.device_id == self._image_device_id()
+        self._btn_adopt_slices.setEnabled(can_adopt)
+        if can_adopt:
+            hu, start, end = self.current_slices
+            self._btn_adopt_slices.setText(
+                f"Mémoriser les coupes actuelles (UH {hu + 1} · SPB {start + 1}–{end + 1})")
+            self._btn_adopt_slices.setToolTip(
+                "Remplacer les coupes enregistrées par celles choisies dans la visionneuse")
+        else:
+            self._btn_adopt_slices.setText("Mémoriser les coupes actuelles")
+            self._btn_adopt_slices.setToolTip(
+                "Chargez une série de cette installation et choisissez les coupes dans la visionneuse")
         self._edit_hospital.setText(device.hospital_name)
         self._edit_location.setText(device.hospital_location)
         self._edit_device.setText(device.device_name)
@@ -294,6 +473,13 @@ class DeviceManagerDialog(QDialog):
         self._label_manufacturer.setText(device.dicom_manufacturer or "—")
         self._label_model.setText(device.dicom_model_name or "—")
         self._label_station.setText(device.dicom_station_name or "—")
+        self._label_dicom_serial.setText(device.dicom_serial_number or "—")
+        if device.runs:
+            last = max(device.runs, key=lambda r: (r.run_date, r.recorded_at))
+            self._label_runs.setText(f"{len(device.runs)} (dernier le {last.date_fr()})")
+        else:
+            self._label_runs.setText("aucun")
+        self._show_geometry(device.roi_geometry)
 
         # Slice positions (displayed as 1-based for user)
         if device.hu_slice_index is not None:
@@ -315,19 +501,33 @@ class DeviceManagerDialog(QDialog):
         self._edit_inventory.clear()
         self._edit_ref_noise.clear()
         self._edit_ref_nps_freq.clear()
+        for edit in self._edit_register.values():
+            edit.clear()
         self._label_manufacturer.setText("—")
         self._label_model.setText("—")
         self._label_station.setText("—")
+        self._label_dicom_serial.setText("—")
+        self._label_runs.setText("—")
+        self._show_geometry(None, no_device=True)
         self._label_hu_slice.setText("—")
         self._label_nps_range.setText("—")
+        self._btn_adopt_slices.setEnabled(False)
+        self._btn_adopt_slices.setText("Mémoriser les coupes actuelles")
+        self._btn_ref_from_analysis.setEnabled(False)
+        self._btn_ref_from_analysis.setStyleSheet("")
         self._btn_delete.setEnabled(False)
         self._btn_save.setEnabled(False)
+        self._status_label.setText("")
 
     def _save_current_device(self):
         """Save modifications to the current device."""
         if self._current_device is None:
             return
+        self._apply_form_to_device()
+        self._persist(self._current_device, "Modifications enregistrées")
 
+    def _apply_form_to_device(self):
+        """Copy the form into the selected device (not saved yet)."""
         # Update device with form values
         self._current_device.hospital_name = self._edit_hospital.text()
         self._current_device.hospital_location = self._edit_location.text()
@@ -343,20 +543,133 @@ class DeviceManagerDialog(QDialog):
         ref_freq_text = self._edit_ref_nps_freq.text().strip()
         self._current_device.reference_nps_freq = parse_float_fr(ref_freq_text) if ref_freq_text else None
 
-        # Save to database
-        self.device_db.save_device(self._current_device)
+        for attr, edit in self._edit_register.items():
+            setattr(self._current_device, attr, edit.text().strip())
 
-        # Refresh list to show updated name
-        current_row = self._device_list.currentRow()
-        self._refresh_device_list()
-        if current_row >= 0 and current_row < self._device_list.count():
-            self._device_list.setCurrentRow(current_row)
+    def _persist(self, device: DeviceConfig, message: str):
+        """Save `device`, rebuild the list on it and report in the status line."""
+        try:
+            self.device_db.save_device(device)
+        except OSError as e:
+            QMessageBox.warning(self, "Enregistrement", f"Impossible d'enregistrer l'installation :\n{e}")
+            return
+        # The database file is the one the application must open next time
+        config = get_app_config()
+        if config.device_database_path != str(self.device_db.db_path):
+            config.device_database_path = str(self.device_db.db_path)
+            save_app_config()
+        self._update_db_path_label()  # the first save creates the file
+        self._refresh_device_list(device.device_id)
+        from datetime import datetime
+        self._status_label.setText(f"{message} — {device.display_name()}, {datetime.now():%H:%M}")
 
-        QMessageBox.information(
-            self,
-            "Enregistré",
-            f"Installation '{self._current_device.display_name()}' enregistrée."
-        )
+    def _create_from_image(self):
+        """Create and save the installation of the loaded image's scanner."""
+        img = self.current_image
+        if img is None:
+            return
+        image_id = self._image_device_id()
+        if self.device_db.get_device(image_id) is not None:
+            self._refresh_device_list(image_id)
+            return
+        device = DeviceConfig.from_dicom(img.manufacturer or "", img.model_name or "",
+                                         img.station_name or "", img.device_serial_number or "")
+        device.device_name = f"{img.manufacturer or ''} {img.model_name or ''}".strip()
+        if self.current_slices is not None:
+            device.hu_slice_index, device.nps_start_slice, device.nps_end_slice = self.current_slices
+        self._persist(device, "Installation créée : complétez ses informations puis enregistrez")
+        self._edit_hospital.setFocus()
+
+    def _show_geometry(self, geometry: ROIGeometry | None, no_device: bool = False):
+        """Fill the read-only "Géométrie des ROI" section."""
+        labels = self._labels_geometry
+        self._btn_reset_geometry.setEnabled(geometry is not None)
+        if geometry is None:
+            labels["state"].setText(
+                "—" if no_device else
+                "non figée (le sera à la définition des valeurs de référence "
+                "ou au premier contrôle enregistré)")
+            for key in ("format", "central", "peripheral", "nps"):
+                labels[key].setText("—")
+            return
+        px = geometry.pixel_size_mm
+
+        def mm(pixels: float) -> str:
+            return format_fr(pixels * px, 1)
+
+        labels["state"].setText(
+            f"figée depuis le contrôle du {iso_to_fr(geometry.frozen_date)}"
+            if geometry.is_frozen else "calculée, non datée")
+        labels["format"].setText(
+            f"matrice {geometry.columns} × {geometry.rows} · pixel {format_fr(px, 3)} mm · "
+            f"fantôme Ø {mm(geometry.phantom_diameter_px)} mm (intérieur)")
+        labels["central"].setText(
+            f"Ø {2 * geometry.central_radius} px ({mm(2 * geometry.central_radius)} mm)")
+        wall_gap = geometry.phantom_diameter_px / 2 - geometry.peripheral_distance - geometry.peripheral_radius
+        labels["peripheral"].setText(
+            f"Ø {2 * geometry.peripheral_radius} px ({mm(2 * geometry.peripheral_radius)} mm) · "
+            f"centre à {geometry.peripheral_distance} px du centre du fantôme · "
+            f"bord externe à {mm(wall_gap)} mm de la paroi interne")
+        labels["nps"].setText(
+            f"{geometry.nps_roi_size} × {geometry.nps_roi_size} px ({mm(geometry.nps_roi_size)} mm) · "
+            f"centres à {geometry.nps_cardinal_distance} px (cardinales) et "
+            f"{geometry.nps_diagonal_offset} px par axe (diagonales) du centre du fantôme")
+
+    def _reset_roi_geometry(self):
+        """Forget the frozen ROI geometry of the selected installation."""
+        device = self._current_device
+        if device is None or device.roi_geometry is None:
+            return
+        answer = QMessageBox.question(
+            self, "Géométrie des ROI",
+            "Oublier les tailles et positions de ROI figées pour cette installation ?\n\n"
+            "Elles seront recalculées sur la prochaine série, puis figées à nouveau lors de la "
+            "prochaine définition des valeurs de référence ou du prochain contrôle enregistré. "
+            "La fréquence moyenne du SPB dépend de la taille des ROI : redéfinissez les valeurs "
+            "de référence si la géométrie change.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._apply_form_to_device()  # keep what was typed in the other fields
+        device.roi_geometry = None
+        self._persist(device, "Géométrie des ROI réinitialisée")
+
+    def _adopt_current_slices(self):
+        """Record the slices chosen in the viewer on the selected installation."""
+        if self._current_device is None or self.current_slices is None:
+            return
+        hu, start, end = self.current_slices
+        self._apply_form_to_device()  # keep what was typed in the other fields
+        self._current_device.hu_slice_index = hu
+        self._current_device.nps_start_slice = start
+        self._current_device.nps_end_slice = end
+        self._persist(self._current_device, "Coupes mémorisées")
+
+    def _set_references_from_analysis(self):
+        """Make the analysis on screen the reference of the selected installation.
+
+        Same effect as the link of the main window summary: reference values
+        and frozen ROI geometry come from the same control.
+        """
+        if self._current_device is None or self.current_analysis is None:
+            return
+        noise, nps_freq, geometry = self.current_analysis
+        nps_text = f" et f SPB = {format_fr(nps_freq, 3)} c/mm" if nps_freq is not None else ""
+        answer = QMessageBox.question(
+            self, "Valeurs de référence",
+            f"Définir σ = {format_fr(noise, 2)} HU{nps_text} (analyse en cours) "
+            "comme valeurs de référence de cette installation ?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._apply_form_to_device()  # keep what was typed in the other fields
+        self._current_device.reference_noise = noise
+        # A missing SPB frequency leaves the recorded one alone
+        if nps_freq is not None:
+            self._current_device.reference_nps_freq = nps_freq
+        if geometry is not None:
+            self._current_device.roi_geometry = geometry
+        self._persist(self._current_device, "Valeurs de référence définies depuis l'analyse en cours")
 
     def _delete_selected_device(self):
         """Delete the selected device."""
@@ -809,53 +1122,6 @@ class NotesEditorDialog(QDialog):
         return self._text_edit.toPlainText()
 
 
-class RegisterInfoDialog(QDialog):
-    """Register of operations items (ANSM 3.2.2) that only the operator knows.
-
-    Entered once per installation and printed on every report: QC phantom,
-    clinical protocol the QC protocol derives from, reconstruction algorithm
-    and level of the QC protocol.
-    """
-
-    FIELDS = (
-        ("phantom_brand", "Fantôme, marque :", "ex. Pro-Project, PTW…"),
-        ("phantom_model", "Fantôme, modèle :", "ex. fantôme d'eau 20 cm"),
-        ("phantom_serial", "Fantôme, n° de série :", ""),
-        ("clinical_protocol_origin", "Protocole clinique d'origine :",
-         "Nom du protocole clinique dont le protocole de CQ est issu"),
-        ("reconstruction_algorithm", "Algorithme de reconstruction :",
-         "Algorithme et niveau du protocole de CQ, ex. iDose niveau 3"),
-    )
-
-    def __init__(self, device: DeviceConfig, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Informations pour le registre des opérations")
-        self.setMinimumWidth(560)
-        layout = QVBoxLayout(self)
-        intro = QLabel(
-            "Ces informations sont exigées dans le registre des opérations (décision ANSM, "
-            "point 3.2.2). Elles sont enregistrées avec l'installation et reprises dans "
-            "chaque rapport.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-        form = QFormLayout()
-        self._edits: dict[str, QLineEdit] = {}
-        for attr, label, placeholder in self.FIELDS:
-            edit = QLineEdit(getattr(device, attr, "") or "")
-            edit.setPlaceholderText(placeholder)
-            form.addRow(label, edit)
-            self._edits[attr] = edit
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def apply_to(self, device: DeviceConfig):
-        for attr, edit in self._edits.items():
-            setattr(device, attr, edit.text().strip())
-
-
 class CorrectiveActionDialog(QDialog):
     """Date and nature of the corrective action taken after a control."""
 
@@ -1083,137 +1349,25 @@ class MainWindow(QMainWindow):
         self._install_summary.setStyleSheet("color: #888; font-size: 11px; margin-left: 2px;")
         right_layout.addWidget(self._install_summary)
 
-        device_form = QWidget()
-        device_form_layout = QGridLayout(device_form)
-        device_form_layout.setContentsMargins(0, 4, 0, 0)
-        device_form_layout.setVerticalSpacing(4)
-        device_form_layout.setHorizontalSpacing(8)
-
-        # Editable fields for installation info (with grey placeholders)
+        # Installation fields. They are not shown here: the installation is
+        # edited in the "Gestion des installations" window. They stay as the
+        # in-memory mirror of the current device that the results view, the
+        # PDF export and the history read, refreshed by _load_device_config.
         self._edit_hospital_name = QLineEdit()
-        self._edit_hospital_name.setPlaceholderText("Nom de l'établissement")
         self._edit_hospital_location = QLineEdit()
-        self._edit_hospital_location.setPlaceholderText("Localisation de l'installation")
         self._edit_device_name = QLineEdit()
-        self._edit_device_name.setPlaceholderText("Nom de l'installation")
         self._edit_commissioning_date = QLineEdit()
-        self._edit_commissioning_date.setPlaceholderText("Date de mise en service")
         self._edit_serial_number = QLineEdit()
-        self._edit_serial_number.setPlaceholderText("Numéro de série")
         self._edit_inventory_number = QLineEdit()
-        self._edit_inventory_number.setPlaceholderText("Numéro d'inventaire")
-
-        # Reference values for stability tests.
-        # Not a QDoubleValidator: it follows the system locale, so outside a
-        # French locale the comma is taken for a thousands separator and its
-        # fixup() rewrites the field on Enter/focus loss ("4,52" -> "452",
-        # "1234,5" -> "12,345"); in a French locale it rejects the dot and
-        # inserts narrow spaces. This regex accepts both separators, nothing else.
-        # No sign: σ and a mean frequency are never negative.
-        ref_validator = QRegularExpressionValidator(
-            QRegularExpression(r"\d*[.,]?\d*"))
         self._edit_ref_noise = QLineEdit()
-        self._edit_ref_noise.setPlaceholderText("Bruit de référence (HU)")
-        self._edit_ref_noise.setValidator(ref_validator)
         self._edit_ref_nps_freq = QLineEdit()
-        self._edit_ref_nps_freq.setPlaceholderText("Fréq. moyenne SPB réf. (cycles/mm)")
-        self._edit_ref_nps_freq.setValidator(ref_validator)
-
-        # Connect signals to update instance variables and check for modifications
-        self._edit_hospital_name.textChanged.connect(self._on_field_changed)
-        self._edit_hospital_location.textChanged.connect(self._on_field_changed)
-        self._edit_device_name.textChanged.connect(self._on_field_changed)
-        self._edit_commissioning_date.textChanged.connect(self._on_field_changed)
-        self._edit_serial_number.textChanged.connect(self._on_field_changed)
-        self._edit_inventory_number.textChanged.connect(self._on_field_changed)
-        self._edit_ref_noise.textChanged.connect(self._on_field_changed)
-        self._edit_ref_nps_freq.textChanged.connect(self._on_field_changed)
-
-        # Connect reference fields to debounced comparison update
+        for edit in (self._edit_hospital_name, self._edit_hospital_location, self._edit_device_name,
+                     self._edit_commissioning_date, self._edit_serial_number, self._edit_inventory_number,
+                     self._edit_ref_noise, self._edit_ref_nps_freq):
+            edit.textChanged.connect(self._on_field_changed)
+        # Reference fields drive the debounced comparison in the results view
         self._edit_ref_noise.textChanged.connect(self._on_reference_field_changed)
         self._edit_ref_nps_freq.textChanged.connect(self._on_reference_field_changed)
-
-        device_form_layout.addWidget(QLabel("Établissement :"), 0, 0)
-        device_form_layout.addWidget(self._edit_hospital_name, 0, 1)
-        device_form_layout.addWidget(QLabel("Localisation :"), 1, 0)
-        device_form_layout.addWidget(self._edit_hospital_location, 1, 1)
-        device_form_layout.addWidget(QLabel("Installation :"), 2, 0)
-        device_form_layout.addWidget(self._edit_device_name, 2, 1)
-        device_form_layout.addWidget(QLabel("Mise en service :"), 3, 0)
-        device_form_layout.addWidget(self._edit_commissioning_date, 3, 1)
-        device_form_layout.addWidget(QLabel("N° série :"), 4, 0)
-        device_form_layout.addWidget(self._edit_serial_number, 4, 1)
-        device_form_layout.addWidget(QLabel("N° inventaire :"), 5, 0)
-        device_form_layout.addWidget(self._edit_inventory_number, 5, 1)
-
-        # Reference values section
-        ref_label = QLabel("Valeurs de référence :")
-        ref_label.setStyleSheet("font-style: italic; color: #888; margin-top: 4px;")
-        device_form_layout.addWidget(ref_label, 6, 0, 1, 2)
-        device_form_layout.addWidget(QLabel("Bruit réf. (σ) :"), 7, 0)
-        device_form_layout.addWidget(self._edit_ref_noise, 7, 1)
-        device_form_layout.addWidget(QLabel("Fréq. SPB réf. :"), 8, 0)
-        device_form_layout.addWidget(self._edit_ref_nps_freq, 8, 1)
-
-        # First control: the measured values are what later controls compare to
-        self._btn_ref_from_current = QPushButton("Définir les valeurs actuelles comme références")
-        self._btn_ref_from_current.setToolTip(
-            "Reprendre le bruit et la fréquence SPB de l'analyse en cours "
-            "comme valeurs de référence de cette installation")
-        self._btn_ref_from_current.clicked.connect(self._set_current_as_reference)
-        device_form_layout.addWidget(self._btn_ref_from_current, 9, 0, 1, 2)
-        self._update_reference_button_state()
-
-        # Slice selection (read-only here: it is chosen in the main window, saved with the device)
-        slices_label = QLabel("Coupes analysées :")
-        slices_label.setStyleSheet("font-style: italic; color: #888; margin-top: 4px;")
-        device_form_layout.addWidget(slices_label, 10, 0, 1, 2)
-        device_form_layout.addWidget(QLabel("Coupe UH :"), 11, 0)
-        self._label_dialog_hu_slice = QLabel("—")
-        device_form_layout.addWidget(self._label_dialog_hu_slice, 11, 1)
-        device_form_layout.addWidget(QLabel("Coupes SPB :"), 12, 0)
-        self._label_dialog_nps_range = QLabel("—")
-        device_form_layout.addWidget(self._label_dialog_nps_range, 12, 1)
-        self._label_dialog_slices_note = QLabel()
-        self._label_dialog_slices_note.setWordWrap(True)
-        self._label_dialog_slices_note.setStyleSheet("font-size: 11px;")
-        device_form_layout.addWidget(self._label_dialog_slices_note, 13, 0, 1, 2)
-        # Register of operations items that cannot be read from the images
-        self._btn_register_info = QPushButton("Informations pour le registre…")
-        self._btn_register_info.setToolTip(
-            "Fantôme de contrôle, protocole clinique d'origine, algorithme de reconstruction : "
-            "exigés dans le registre des opérations et repris dans chaque rapport")
-        self._btn_register_info.clicked.connect(self._edit_register_info)
-        device_form_layout.addWidget(self._btn_register_info, 14, 0, 1, 2)
-
-        # Installation dialog (persistent: the QLineEdits above must outlive each opening
-        # because the results view, PDF export and auto-detection read them directly)
-        self._install_dialog = QDialog(self)
-        self._install_dialog.setWindowTitle("Installation")
-        self._install_dialog.setMinimumWidth(520)
-        dialog_layout = QVBoxLayout(self._install_dialog)
-        dialog_layout.addWidget(device_form)
-
-        dialog_buttons = QHBoxLayout()
-        self._btn_save_device = QPushButton("Enregistrer")
-        self._btn_save_device.clicked.connect(self._save_current_device)
-        dialog_buttons.addWidget(self._btn_save_device)
-
-        self._btn_restore_device = QPushButton("Restaurer")
-        self._btn_restore_device.setToolTip("Restaurer les valeurs enregistrées")
-        self._btn_restore_device.clicked.connect(self._restore_saved_values)
-        self._btn_restore_device.setEnabled(False)  # Disabled until values are modified
-        dialog_buttons.addWidget(self._btn_restore_device)
-
-        self._btn_delete_device = QPushButton("Supprimer")
-        self._btn_delete_device.clicked.connect(self._delete_current_device)
-        dialog_buttons.addWidget(self._btn_delete_device)
-
-        dialog_buttons.addStretch(1)
-        btn_close = QPushButton("Fermer")
-        btn_close.clicked.connect(self._install_dialog.accept)
-        dialog_buttons.addWidget(btn_close)
-        dialog_layout.addLayout(dialog_buttons)
 
         self._update_install_summary()
         right_layout.addSpacing(10)
@@ -1566,26 +1720,6 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             lines[-1] += f" · {self._current_series.num_images} coupes"
         return "\n".join(line for line in lines if line)
 
-    def _restore_saved_values(self):
-        """Restore all saved values from the current device."""
-        if self._current_device is None:
-            return
-
-        # Restore text fields
-        self._edit_hospital_name.setText(self._saved_hospital_name)
-        self._edit_hospital_location.setText(self._saved_hospital_location)
-        self._edit_device_name.setText(self._saved_device_name)
-        self._edit_commissioning_date.setText(self._saved_commissioning_date)
-        self._edit_serial_number.setText(self._saved_serial_number)
-        self._edit_inventory_number.setText(self._saved_inventory_number)
-        self._edit_ref_noise.setText(self._saved_ref_noise)
-        self._edit_ref_nps_freq.setText(self._saved_ref_nps_freq)
-
-        self._reset_slices_to_saved()
-
-        # Update button states
-        self._update_save_button_style()
-
     def _reset_slices_to_saved(self):
         """Put the HU slice and SPB range back to the values saved with the device."""
         if self._saved_hu_slice is not None:
@@ -1604,68 +1738,30 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         self._serial_number = self._edit_serial_number.text()
         self._inventory_number = self._edit_inventory_number.text()
 
-        # Check if any value has been modified
-        self._update_save_button_style()
         self._update_install_summary()
 
-    def _update_save_button_style(self):
-        """Update the save and restore button states based on whether values are modified."""
-        is_modified = self._check_any_value_modified()
-
-        # Update restore button - enabled only when modified and device is saved
-        self._btn_restore_device.setEnabled(is_modified and self._current_device is not None)
-
-        # Update save button - enabled only when there are changes
-        self._btn_save_device.setEnabled(is_modified)
-
-        # Pending changes make "Enregistrer" the action to take, marked with the
-        # same accent fill as the other primary buttons rather than a separate
-        # amber glow, so one colour means one thing across the application
-        self._btn_save_device.setStyleSheet(primary_button_style() if is_modified else "")
-
     def _check_any_value_modified(self) -> bool:
-        """Check if any saved value has been modified or if this is a new device."""
-        # If no current device but image is loaded, allow saving as new device
-        if self._current_device is None:
-            return self._current_image is not None
+        """True when the slices chosen in the viewer differ from the saved ones.
 
-        # Check text fields
-        if self._edit_hospital_name.text() != self._saved_hospital_name:
-            return True
-        if self._edit_hospital_location.text() != self._saved_hospital_location:
-            return True
-        if self._edit_device_name.text() != self._saved_device_name:
-            return True
-        if self._edit_commissioning_date.text() != self._saved_commissioning_date:
-            return True
-        if self._edit_serial_number.text() != self._saved_serial_number:
-            return True
-        if self._edit_inventory_number.text() != self._saved_inventory_number:
-            return True
-        if self._edit_ref_noise.text() != self._saved_ref_noise:
-            return True
-        if self._edit_ref_nps_freq.text() != self._saved_ref_nps_freq:
-            return True
-
-        # Check slice values
+        The installation fields themselves are edited and saved in the
+        "Gestion des installations" window, so only the slice selection can be
+        pending here.
+        """
+        if self._current_device is None or self._current_series is None:
+            return False
         current_hu = self.image_viewer.get_hu_slice_index()
         current_nps_start, current_nps_end = self.image_viewer.get_nps_slice_range()
-
         if self._saved_hu_slice is not None and current_hu != self._saved_hu_slice:
             return True
         if self._saved_nps_start is not None and current_nps_start != self._saved_nps_start:
             return True
         if self._saved_nps_end is not None and current_nps_end != self._saved_nps_end:
             return True
-
         return False
 
     def _check_slice_values_modified(self):
-        """Check if slice values have been modified and update button states."""
-        # Update save and restore button states
-        self._update_save_button_style()
+        """Refresh the summary and the reset button after a slice change."""
         self._update_install_summary()
-        self._update_dialog_slice_labels()
         if hasattr(self, "_btn_reset_slices"):
             _, _, differs = self._slice_selection_state()
             self._btn_reset_slices.setEnabled(differs)
@@ -2570,7 +2666,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 return False
             self._saved_ref_noise = self._edit_ref_noise.text()
             self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
-        self._update_save_button_style()
         self._update_install_summary()
         self._update_results_display()
         self.statusbar.showMessage(f"Valeurs de référence définies depuis {source}", 5000)
@@ -2586,6 +2681,25 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         """Handle the links embedded in the summary under the device selector."""
         if href == "set-reference":
             self._set_current_as_reference()
+        elif href == "save-slices":
+            self._save_current_slices()
+
+    def _save_current_slices(self):
+        """Record the slices chosen in the viewer on the current installation."""
+        device = self._current_device
+        if device is None or self._current_series is None:
+            return
+        device.hu_slice_index = self.image_viewer.get_hu_slice_index()
+        device.nps_start_slice, device.nps_end_slice = self.image_viewer.get_nps_slice_range()
+        try:
+            self._device_db.save_device(device)
+        except OSError as e:
+            QMessageBox.warning(self, "Installation", f"Impossible d'enregistrer les coupes :\n{e}")
+            return
+        self._saved_hu_slice = device.hu_slice_index
+        self._saved_nps_start, self._saved_nps_end = device.nps_start_slice, device.nps_end_slice
+        self._check_slice_values_modified()
+        self.statusbar.showMessage("Coupes mémorisées pour cette installation", 5000)
 
     def _set_current_as_reference(self):
         """Make the values just measured the reference values.
@@ -2601,22 +2715,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 "les valeurs actuelles comme références.")
             return
         nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
-        if self._confirm_and_set_references(self._current_results.noise, nps_freq,
-                                            "analyse en cours",
-                                            geometry=self._run_geometry(self._current_run_for_history())):
-            self._update_reference_button_state()
-
-    def _update_reference_button_state(self):
-        """Enable and highlight "valeurs actuelles" when it is the thing to do."""
-        if not hasattr(self, "_btn_ref_from_current"):
-            return
-        has_analysis = self._current_results is not None
-        self._btn_ref_from_current.setEnabled(has_analysis)
-        no_reference = not (self._edit_ref_noise.text().strip()
-                            or self._edit_ref_nps_freq.text().strip())
-        # First control: no reference yet, so this is the action to take
-        self._btn_ref_from_current.setStyleSheet(
-            primary_button_style() if has_analysis and no_reference else "")
+        self._confirm_and_set_references(self._current_results.noise, nps_freq,
+                                         "analyse en cours",
+                                         geometry=self._run_geometry(self._current_run_for_history()))
 
     def _delete_history_run(self, run: QCRun):
         if self._current_device is None:
@@ -2627,26 +2728,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             QMessageBox.warning(self, "Historique", f"Impossible de supprimer le contrôle :\n{e}")
             return
         self._refresh_history(self._current_device)
-
-    def _edit_register_info(self):
-        """Edit the register-of-operations items of the current installation."""
-        if self._current_device is None:
-            QMessageBox.information(
-                self, "Registre des opérations",
-                "Enregistrez d'abord l'installation (bouton « Enregistrer ») : ces informations "
-                "sont stockées avec elle.")
-            return
-        dialog = RegisterInfoDialog(self._current_device, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        dialog.apply_to(self._current_device)
-        try:
-            self._device_db.save_device(self._current_device)
-        except OSError as e:
-            QMessageBox.warning(self, "Registre des opérations",
-                                f"Impossible d'enregistrer les informations :\n{e}")
-            return
-        self.statusbar.showMessage("Informations pour le registre enregistrées", 5000)
 
     def _edit_corrective_action(self, run: QCRun):
         """Record the corrective action taken after a recorded control."""
@@ -3187,12 +3268,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         self._update_install_summary()
 
     def _edit_installation(self):
-        """Open the installation form."""
-        self._update_dialog_slice_labels()
-        # Without this, "Enregistrer" keeps the enabled state of the last visit
-        self._update_save_button_style()
-        self._install_dialog.exec()
-        self._update_install_summary()
+        """"Modifier…" / "Nouvelle installation": open the installations window."""
+        self._show_device_manager()
 
     def _slice_selection_state(self) -> tuple[str, str | None, bool]:
         """Return (current selection text, saved selection text or None, differs)."""
@@ -3206,47 +3283,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             return current, None, False
         saved = f"UH {self._saved_hu_slice + 1} · SPB {self._saved_nps_start + 1}–{self._saved_nps_end + 1}"
         return current, saved, current != saved
-
-    def _update_dialog_slice_labels(self):
-        """Show the current and saved slice selection inside the Installation dialog."""
-        if not hasattr(self, "_label_dialog_hu_slice"):
-            return
-        c = _theme_colors()
-        if self._current_series is None:
-            self._label_dialog_hu_slice.setText("—")
-            self._label_dialog_nps_range.setText("—")
-            if self._saved_hu_slice is not None:
-                self._label_dialog_hu_slice.setText(f"{self._saved_hu_slice + 1} (enregistrée)")
-            if self._saved_nps_start is not None and self._saved_nps_end is not None:
-                self._label_dialog_nps_range.setText(
-                    f"{self._saved_nps_start + 1} – {self._saved_nps_end + 1} (enregistrées)")
-            self._label_dialog_slices_note.setText("Aucune série chargée : les coupes enregistrées sont conservées.")
-            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
-            return
-
-        hu = self.image_viewer.get_hu_slice_index()
-        start, end = self.image_viewer.get_nps_slice_range()
-        hu_text = str(hu + 1)
-        nps_text = f"{start + 1} – {end + 1}"
-        _, saved, differs = self._slice_selection_state()
-        if differs:
-            if self._saved_hu_slice is not None and hu != self._saved_hu_slice:
-                hu_text += f"   (enregistrée : {self._saved_hu_slice + 1})"
-            if (self._saved_nps_start, self._saved_nps_end) != (start, end):
-                nps_text += f"   (enregistrées : {self._saved_nps_start + 1} – {self._saved_nps_end + 1})"
-            self._label_dialog_slices_note.setText(
-                "La sélection actuelle diffère des coupes enregistrées. "
-                "« Enregistrer » remplacera les coupes enregistrées par la sélection actuelle.")
-            self._label_dialog_slices_note.setStyleSheet(f"font-size: 11px; color: {c['warning_border']};")
-        elif saved is None:
-            self._label_dialog_slices_note.setText(
-                "Coupes non encore enregistrées pour cette installation : « Enregistrer » les mémorisera.")
-            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
-        else:
-            self._label_dialog_slices_note.setText("Sélection identique aux coupes enregistrées.")
-            self._label_dialog_slices_note.setStyleSheet("font-size: 11px; color: #888;")
-        self._label_dialog_hu_slice.setText(hu_text)
-        self._label_dialog_nps_range.setText(nps_text)
 
     def _placeholder_install_label(self) -> str:
         """Text of the first combo entry, which stands for "no installation"."""
@@ -3305,7 +3341,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
     def _update_install_summary(self):
         """Refresh the one-glance summary shown under the device selector."""
         self._update_install_selector()
-        self._update_reference_button_state()
         if not hasattr(self, "_install_summary"):
             return
         c = _theme_colors()
@@ -3338,13 +3373,14 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         else:
             ref_line = f'<span style="color:{c["warning_border"]};">Valeurs de référence non renseignées</span>'
 
-        modified = " · <i>modifications non enregistrées</i>" if self._check_any_value_modified() else ""
+        modified = ""
         current, saved_slices, differs = self._slice_selection_state()
+        save_link = f'<a href="save-slices" style="color:{c["accent"]};">mémoriser ces coupes</a>'
         if differs:
             slice_line = (f'<br><span style="color:{c["warning_border"]};">Coupes {current} ≠ enregistrées '
-                          f'({saved_slices}) — cliquer sur « Modifier… » pour les enregistrer</span>')
+                          f'({saved_slices})</span> — {save_link}')
         elif current and saved_slices is None and self._current_device is not None:
-            slice_line = f"<br>Coupes {current} · <i>non enregistrées</i>"
+            slice_line = f"<br>Coupes {current} · <i>non enregistrées</i> — {save_link}"
         elif current:
             slice_line = f"<br>Coupes {current}"
         else:
@@ -3430,150 +3466,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_ref_noise = self._edit_ref_noise.text()
             self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
 
-        # Update button states
-        self._update_save_button_style()
-
-    def _save_current_device(self):
-        """Save the current device configuration to the database."""
-        if self._current_image is None:
-            QMessageBox.warning(
-                self,
-                "Attention",
-                "Veuillez d'abord charger une image DICOM pour identifier l'installation."
-            )
-            return
-
-        # Check if database file exists, prompt to create if not
-        if not self._device_db.db_path.exists():
-            reply = QMessageBox.question(
-                self,
-                "Base de données introuvable",
-                f"Le fichier de base de données n'existe pas :\n{self._device_db.db_path}\n\n"
-                "Voulez-vous le créer maintenant ?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                # Create the database file
-                self._device_db.db_path.parent.mkdir(parents=True, exist_ok=True)
-                self._device_db._save()  # This will create the file
-            else:
-                return
-
-        # Create or update device config
-        img = self._current_image
-        if self._current_device is None:
-            # The id is derived from the DICOM identity, so a device saved earlier
-            # for this scanner must be updated, not replaced (that would wipe its
-            # recorded controls)
-            device = self._device_db.find_device(
-                img.manufacturer or "",
-                img.model_name or "",
-                img.station_name or "",
-                img.device_serial_number or "",
-            )
-            if device is None:
-                # Create new device from DICOM metadata
-                device = DeviceConfig.from_dicom(
-                    img.manufacturer or "",
-                    img.model_name or "",
-                    img.station_name or "",
-                    img.device_serial_number or "",
-                )
-        else:
-            device = self._current_device
-
-        # Update with current field values
-        device.hospital_name = self._hospital_name
-        device.hospital_location = self._hospital_location
-        device.device_name = self._device_name
-        device.commissioning_date = self._commissioning_date
-        device.serial_number = self._serial_number
-        device.inventory_number = self._inventory_number
-
-        # Update reference values (accept both dot and comma as decimal separator)
-        ref_noise_text = self._edit_ref_noise.text().strip()
-        device.reference_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
-
-        ref_freq_text = self._edit_ref_nps_freq.text().strip()
-        device.reference_nps_freq = parse_float_fr(ref_freq_text) if ref_freq_text else None
-
-        # Save slice values
-        device.hu_slice_index = self.image_viewer.get_hu_slice_index()
-        nps_start, nps_end = self.image_viewer.get_nps_slice_range()
-        device.nps_start_slice = nps_start
-        device.nps_end_slice = nps_end
-
-        # Save to database
-        self._device_db.save_device(device)
-        self._current_device = device
-
-        # Always save database path in settings
-        config = get_app_config()
-        if config.device_database_path != str(self._device_db.db_path):
-            config.device_database_path = str(self._device_db.db_path)
-            save_app_config()
-
-        # Update saved slice values
-        self._saved_hu_slice = device.hu_slice_index
-        self._saved_nps_start = device.nps_start_slice
-        self._saved_nps_end = device.nps_end_slice
-
-        # Update saved field values
-        self._saved_hospital_name = self._edit_hospital_name.text()
-        self._saved_hospital_location = self._edit_hospital_location.text()
-        self._saved_device_name = self._edit_device_name.text()
-        self._saved_commissioning_date = self._edit_commissioning_date.text()
-        self._saved_serial_number = self._edit_serial_number.text()
-        self._saved_inventory_number = self._edit_inventory_number.text()
-        self._saved_ref_noise = self._edit_ref_noise.text()
-        self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
-
-        # Reset button states
-        self._update_save_button_style()
-
-        # Refresh combo and select the saved device
-        self._refresh_device_combo()
-
-        # History tab now evaluates against the saved references
-        self._refresh_history(device)
-
-        # Re-run analysis display to compare with new reference values
-        self._update_results_display()
-
-        self.statusbar.showMessage(f"Installation '{device.display_name()}' enregistrée")
-        self._update_install_summary()
-        self._update_dialog_slice_labels()
-
-    def _delete_current_device(self):
-        """Delete the currently selected device from the database."""
-        if self._current_device is None:
-            QMessageBox.warning(
-                self,
-                "Attention",
-                "Aucune installation sélectionnée à supprimer."
-            )
-            return
-
-        # Confirm deletion
-        reply = QMessageBox.question(
-            self,
-            "Confirmer la suppression",
-            f"Voulez-vous vraiment supprimer l'installation '{self._current_device.display_name()}' ?"
-            + (f"\n\nSes {len(self._current_device.runs)} contrôles enregistrés seront perdus."
-               if self._current_device.runs else ""),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            device_name = self._current_device.display_name()
-            self._device_db.delete_device(self._current_device.device_id)
-            self._current_device = None
-            self._refresh_device_combo()
-            self._load_device_config(None)
-            self.statusbar.showMessage(f"Installation '{device_name}' supprimée")
-
     def _try_auto_detect_device(self):
         """Try to auto-detect device from database based on DICOM metadata."""
         if self._current_image is None:
@@ -3603,10 +3495,6 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             # judged against, or reported with, another installation's values
             self._current_device = None
             self._load_device_config(None)
-            # Pre-fill device name from DICOM
-            device_name = f"{img.manufacturer or ''} {img.model_name or ''}".strip()
-            if device_name:
-                self._edit_device_name.setText(device_name)
             # Set combo to "Installation inconnue"
             self._device_combo.blockSignals(True)
             self._device_combo.setCurrentIndex(0)
@@ -3614,18 +3502,58 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._update_install_summary()
 
     def _show_device_manager(self):
-        """Show the device management dialog."""
-        dialog = DeviceManagerDialog(self._device_db, self)
+        """Open the installations window, then take its changes into account."""
+        current_slices = None
+        if self._current_series is not None:
+            start, end = self.image_viewer.get_nps_slice_range()
+            current_slices = (self.image_viewer.get_hu_slice_index(), start, end)
+        dialog = DeviceManagerDialog(
+            self._device_db, self,
+            select_device_id=self._current_device.device_id if self._current_device else None,
+            current_image=self._current_image,
+            current_slices=current_slices,
+            current_analysis=self._current_analysis_for_reference())
         dialog.exec()
-        # Update device_db reference if it was changed in the dialog
+        self._after_device_manager(dialog)
+
+    def _current_analysis_for_reference(self) -> tuple[float, float | None, ROIGeometry | None] | None:
+        """(noise, SPB frequency, frozen ROI geometry) of the analysis on screen, None if none."""
+        if self._current_results is None:
+            return None
+        nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
+        return (self._current_results.noise, nps_freq,
+                self._run_geometry(self._current_run_for_history()))
+
+    def _after_device_manager(self, dialog: DeviceManagerDialog):
+        """Resync the window with the database the installations window left."""
+        # The database file itself may have been switched in the dialog
         self._device_db = dialog.device_db
-        # The dialog may have edited, deleted or replaced (new database) the
-        # device shown here: resolve it again by id and reload its values so the
-        # results panel, the PDF and the history never use a stale object
-        current_id = self._current_device.device_id if self._current_device else None
-        self._current_device = self._device_db.get_device(current_id) if current_id else None
-        self._load_device_config(self._current_device)
-        # Refresh combo after dialog closes (in case devices were modified)
+        # The dialog may have edited, deleted or replaced the device shown here:
+        # resolve it again by id so the results panel, the PDF and the history
+        # never use a stale object. A loaded image wins: its installation may
+        # have just been created in the dialog.
+        if self._current_image is not None:
+            img = self._current_image
+            device = self._device_db.find_device(img.manufacturer or "", img.model_name or "",
+                                                 img.station_name or "", img.device_serial_number or "")
+        else:
+            current_id = self._current_device.device_id if self._current_device else None
+            device = self._device_db.get_device(current_id) if current_id else None
+            if device is None and dialog.selected_device_id:
+                device = self._device_db.get_device(dialog.selected_device_id)
+        self._current_device = device
+        self._load_device_config(device)
+        # References defined in the dialog froze the geometry of the analysis
+        # on screen: show it as frozen without waiting for the next analysis
+        frozen = device.roi_geometry if device is not None else None
+        for result in (self._current_results, self._nps_results):
+            if result is None or result.geometry is None:
+                continue
+            if frozen is None:
+                # Geometry reset in the dialog (or no installation any more)
+                result.geometry = result.geometry.frozen("")
+            elif result.geometry.frozen(frozen.frozen_date) == frozen:
+                result.geometry = frozen
         self._refresh_device_combo()
         self._update_results_display()
         self._update_install_summary()
