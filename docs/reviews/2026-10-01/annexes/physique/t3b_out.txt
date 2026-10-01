@@ -1,0 +1,31 @@
+II-bis. NOYAU DUR : zeros hors matrice (code) vs NaN-mean (bins NaN exclus) vs limitation a Nyquist
+==============================================================================================================
+f0=0.6 dx=0.573 Nyq=0.873 (bins valides NaN-mean: 42/45, fmax valide 1.118 = 1.281 Nyq)
+   analytique 0..inf = 0.5317 ; analytique 0..Nyq = 0.4609
+   code (zeros, fit)      = 0.4807  (-9.59 % vs 0..inf ; +4.30 % vs 0..Nyq)
+   NaN-mean brut          = 0.5098  (-4.13 % vs 0..inf)
+   NaN-mean fit           = 0.5097  (-4.15 % vs 0..inf)
+   brut limite 0..Nyq     = 0.4606  (-0.07 % vs 0..Nyq)
+   ecart code vs NaN-mean(fit) = -5.68 %
+f0=0.8 dx=0.5 Nyq=1.000 (bins valides NaN-mean: 42/45, fmax valide 1.281 = 1.281 Nyq)
+   analytique 0..inf = 0.7090 ; analytique 0..Nyq = 0.5626
+   code (zeros, fit)      = 0.5948  (-16.10 % vs 0..inf ; +5.72 % vs 0..Nyq)
+   NaN-mean brut          = 0.6436  (-9.22 % vs 0..inf)
+   NaN-mean fit           = 0.6436  (-9.23 % vs 0..inf)
+   brut limite 0..Nyq     = 0.5613  (-0.24 % vs 0..Nyq)
+   ecart code vs NaN-mean(fit) = -7.58 %
+f0=0.45 dx=0.7 Nyq=0.714 (bins valides NaN-mean: 42/45, fmax valide 0.915 = 1.281 Nyq)
+   analytique 0..inf = 0.3988 ; analytique 0..Nyq = 0.3604
+   code (zeros, fit)      = 0.3730  (-6.48 % vs 0..inf ; +3.48 % vs 0..Nyq)
+   NaN-mean brut          = 0.3904  (-2.10 % vs 0..inf)
+   NaN-mean fit           = 0.3904  (-2.11 % vs 0..inf)
+   brut limite 0..Nyq     = 0.3606  (+0.05 % vs 0..Nyq)
+   ecart code vs NaN-mean(fit) = -4.46 %
+f0=0.3 dx=0.5 Nyq=1.000 (bins valides NaN-mean: 42/45, fmax valide 1.281 = 1.281 Nyq)
+   analytique 0..inf = 0.2659 ; analytique 0..Nyq = 0.2659
+   code (zeros, fit)      = 0.2728  (+2.60 % vs 0..inf ; +2.60 % vs 0..Nyq)
+   NaN-mean brut          = 0.2721  (+2.33 % vs 0..inf)
+   NaN-mean fit           = 0.2728  (+2.59 % vs 0..inf)
+   brut limite 0..Nyq     = 0.2718  (+2.25 % vs 0..Nyq)
+   ecart code vs NaN-mean(fit) = +0.01 %
+FIN t3b

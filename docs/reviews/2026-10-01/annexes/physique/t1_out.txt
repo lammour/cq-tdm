@@ -1,0 +1,137 @@
+
+====================================================================================================
+A. BRUIT BLANC GAUSSIEN : NPS 2D attendu = sigma^2 * dx * dy, Parseval
+====================================================================================================
+attendu NPS2D plat = sigma^2*dx^2 = 25.0000 HU^2.mm^2
+moyenne NPS2D (tous bins)         = 24.9658  (ecart -0.137 %)
+NPS2D au DC (apres detrend ordre 2) = 2.325e-25 ; bins voisins (c,c+1)=5.973 (c,c+2)=22.733 (c+1,c+1)=19.800
+moyenne NPS2D hors basses freq (|f|>0.15) = 25.0038 (ecart +0.015 %)
+Parseval: sum(NPS2D)*df^2 = 99.863  vs var ROI brute 99.986  vs var ROI detrendee 99.863  (sigma^2=100.0)
+  -> perte de variance due au detrend ordre 2: 0.123 % (attendu ~ 6/4096 = 0.146 %)
+  -> df = 0.03125 mm^-1 ; attendu 1/(N*dx) = 0.03125
+radial: 45 bins, fr[0..3]=[0.     0.0312 0.0625 0.0938], fr[-1]=1.3750 (= 1.3750 x Nyquist), pas=0.03125
+NPS radial brut (bins 0..44):
+[ 0.     10.2892 23.1677 24.3365 24.5721 24.7317 25.0003 25.1935 25.0533 24.9228 25.2351 25.0635 25.1519 25.2346 24.849  24.9624 25.2246
+ 24.9575 24.8292 24.9786 25.1547 24.6551 24.9712 24.8616 24.9714 24.8025 24.8715 25.0171 24.7754 24.994  25.0275 24.816  20.5554 13.6143
+ 13.6482 11.0177  8.1453  5.5651  5.3233  5.3136  5.3359  2.6202  0.      0.      0.    ]
+NPS radial moyen sur f<=Nyquist (hors bin 0)= 24.2883 (attendu 25.0)
+NPS radial a f = Nyquist..1.375 Nyquist      = [13.6143 13.6482 11.0177  8.1453  5.5651  5.3233  5.3136  5.3359  2.6202  0.      0.      0.    ]
+f_moy brut [0,1.375Nyq] = 0.5728 ; f_moy brut [0,Nyq] = 0.5168 ; attendu bruit blanc (plat jusqu'a Nyq) = Nyq/2 = 0.5000
+f_moy FIT  [0,1.375Nyq] = 0.5730 ; f_moy FIT [0,Nyq] = 0.5148
+fit min = 0.000, fit[0]=0.000, fit max = 25.884 ; residu RMS fit-brut sur f<=Nyq = 0.998
+'total_noise_power' du code = sum(nps_radial)*df = 26.494 (unite reelle HU^2.mm) ; integrale polaire 2*pi*int f NPS1D df (0..Nyq) = 77.82 ; sigma^2 = 100.0 ; pi/4*sigma^2 (disque inscrit) = 78.54
+
+====================================================================================================
+B. BRUIT CT-LIKE S(f) = f exp(-(f/f0)^2) : f_moy analytique vs analyze_nps
+====================================================================================================
+f0=0.3 dx=0.5 matrix=512 ROI=56px coupes=10 rankwarn=0
+   f_moy analytique = 0.2659 | code (fit, 0..1.375Nyq) = 0.2776 (+4.40 %) | brut 0..1.375Nyq = 0.2775 (+4.37 %) | brut 0..Nyq = 0.2772 (+4.26 %) | fit 0..Nyq = 0.2770 (+4.20 %) | centroide 2D cartesien = 0.3486
+   Parseval 2D: sum(NPS2D)df^2 = 99.58 vs var ROI = 99.98 (sigma^2 = 100.0) ; fit min = 0.000 ; part de puissance du fit au-dela de Nyquist = 0.05 % ; part brute au-dela de Nyquist = 0.02 %
+   pic brut a f = 0.2171, pic fit a f = 0.2171 ; analytique pic = f0/sqrt(2) = 0.2121
+f0=0.2 dx=0.5 matrix=512 ROI=56px coupes=10 rankwarn=0
+   f_moy analytique = 0.1772 | code (fit, 0..1.375Nyq) = 0.1911 (+7.83 %) | brut 0..1.375Nyq = 0.1881 (+6.13 %) | brut 0..Nyq = 0.1880 (+6.06 %) | fit 0..Nyq = 0.1885 (+6.35 %) | centroide 2D cartesien = 0.2385
+   Parseval 2D: sum(NPS2D)df^2 = 98.72 vs var ROI = 99.90 (sigma^2 = 100.0) ; fit min = 0.000 ; part de puissance du fit au-dela de Nyquist = 0.25 % ; part brute au-dela de Nyquist = 0.00 %
+   pic brut a f = 0.1447, pic fit a f = 0.1447 ; analytique pic = f0/sqrt(2) = 0.1414
+f0=0.4 dx=0.5 matrix=512 ROI=56px coupes=10 rankwarn=0
+   f_moy analytique = 0.3545 | code (fit, 0..1.375Nyq) = 0.3625 (+2.26 %) | brut 0..1.375Nyq = 0.3626 (+2.29 %) | brut 0..Nyq = 0.3606 (+1.73 %) | fit 0..Nyq = 0.3604 (+1.66 %) | centroide 2D cartesien = 0.4559
+   Parseval 2D: sum(NPS2D)df^2 = 99.24 vs var ROI = 99.41 (sigma^2 = 100.0) ; fit min = 0.000 ; part de puissance du fit au-dela de Nyquist = 0.18 % ; part brute au-dela de Nyquist = 0.16 %
+   pic brut a f = 0.2895, pic fit a f = 0.2895 ; analytique pic = f0/sqrt(2) = 0.2828
+f0=0.3 dx=0.7 matrix=512 ROI=56px coupes=10 rankwarn=0
+   f_moy analytique = 0.2659 | code (fit, 0..1.375Nyq) = 0.2702 (+1.64 %) | brut 0..1.375Nyq = 0.2703 (+1.68 %) | brut 0..Nyq = 0.2683 (+0.92 %) | fit 0..Nyq = 0.2681 (+0.86 %) | centroide 2D cartesien = 0.3402
+   Parseval 2D: sum(NPS2D)df^2 = 100.10 vs var ROI = 100.27 (sigma^2 = 100.0) ; fit min = 0.000 ; part de puissance du fit au-dela de Nyquist = 0.26 % ; part brute au-dela de Nyquist = 0.23 %
+   pic brut a f = 0.2068, pic fit a f = 0.2068 ; analytique pic = f0/sqrt(2) = 0.2121
+f0=0.3 dx=0.25 matrix=1024 ROI=120px coupes=10 rankwarn=0
+   f_moy analytique = 0.2659 | code (fit, 0..1.375Nyq) = 0.3016 (+13.46 %) | brut 0..1.375Nyq = 0.2731 (+2.72 %) | brut 0..Nyq = 0.2731 (+2.71 %) | fit 0..Nyq = 0.2847 (+7.08 %) | centroide 2D cartesien = 0.3514
+   Parseval 2D: sum(NPS2D)df^2 = 99.87 vs var ROI = 100.23 (sigma^2 = 100.0) ; fit min = 0.000 ; part de puissance du fit au-dela de Nyquist = 0.78 % ; part brute au-dela de Nyquist = 0.00 %
+   pic brut a f = 0.2348, pic fit a f = 0.2012 ; analytique pic = f0/sqrt(2) = 0.2121
+
+====================================================================================================
+C. AJUSTEMENT POLYNOMIAL DEGRE 11 : conditionnement, domaine, degre
+====================================================================================================
+dx=0.2: f max=3.438 mm^-1, cond(Vandermonde brute)=5.890e+09, cond(Vandermonde colonnes normalisees, comme np.polyfit)=7.588e+07, cond(Vandermonde domaine [-1,1])=6.906e+03
+   np.polyfit warnings: []
+   max |polyfit - Polynomial.fit(domaine scale)| = 1.063e-09 (echelle NPS max 164.1)
+dx=0.5: f max=1.375 mm^-1, cond(Vandermonde brute)=9.620e+07, cond(Vandermonde colonnes normalisees, comme np.polyfit)=7.588e+07, cond(Vandermonde domaine [-1,1])=6.906e+03
+   np.polyfit warnings: []
+   max |polyfit - Polynomial.fit(domaine scale)| = 7.074e-10 (echelle NPS max 164.1)
+dx=1.0: f max=0.688 mm^-1, cond(Vandermonde brute)=2.007e+09, cond(Vandermonde colonnes normalisees, comme np.polyfit)=7.588e+07, cond(Vandermonde domaine [-1,1])=6.906e+03
+   np.polyfit warnings: []
+   max |polyfit - Polynomial.fit(domaine scale)| = 7.074e-10 (echelle NPS max 164.1)
+Sensibilite de f_moy au degre du polynome (meme spectre brut, f en 0..1.375 Nyq):
+   degre  5: f_moy = 0.2821 (+6.10 % vs analytique), f_moy(0..Nyq) = 0.2739, min fit = 0.00, RMS residu = 5.105
+   degre  7: f_moy = 0.2851 (+7.23 % vs analytique), f_moy(0..Nyq) = 0.2783, min fit = 0.00, RMS residu = 2.885
+   degre  9: f_moy = 0.2775 (+4.39 % vs analytique), f_moy(0..Nyq) = 0.2772, min fit = 0.00, RMS residu = 1.262
+   degre 11: f_moy = 0.2776 (+4.40 % vs analytique), f_moy(0..Nyq) = 0.2770, min fit = 0.00, RMS residu = 1.251
+   degre 13: f_moy = 0.2784 (+4.73 % vs analytique), f_moy(0..Nyq) = 0.2773, min fit = 0.00, RMS residu = 1.081
+   degre 15: f_moy = 0.2780 (+4.57 % vs analytique), f_moy(0..Nyq) = 0.2771, min fit = 0.00, RMS residu = 0.772
+   degre 17: f_moy = 0.2777 (+4.47 % vs analytique), f_moy(0..Nyq) = 0.2772, min fit = 0.00, RMS residu = 0.743
+   brut      : f_moy = 0.2775 (+4.37 %)
+   zone negative du fit degre 11 avant clipping: min = -0.792, aire negative = -0.025 vs aire totale 58.60
+
+====================================================================================================
+D. AXE DE FREQUENCE RADIAL SELON LA TAILLE DE ROI (pas code vs 1/(N dx))
+====================================================================================================
+ N   num_bins  r_pixels  pas_code     1/(N dx)   ratio   erreur % sur l'axe (et donc sur f_moy)
+ 32    23       22     0.062500   0.062500   1.0000   +0.000
+ 40    28       27     0.050926   0.050000   1.0185   +1.852
+ 48    34       33     0.041667   0.041667   1.0000   +0.000
+ 56    39       38     0.036184   0.035714   1.0132   +1.316
+ 64    45       44     0.031250   0.031250   1.0000   +0.000
+ 72    50       49     0.028061   0.027778   1.0102   +1.020
+ 80    56       55     0.025000   0.025000   1.0000   +0.000
+ 88    61       60     0.022917   0.022727   1.0083   +0.833
+ 96    67       66     0.020833   0.020833   1.0000   +0.000
+104    72       71     0.019366   0.019231   1.0070   +0.704
+112    78       77     0.017857   0.017857   1.0000   +0.000
+120    83       82     0.016768   0.016667   1.0061   +0.610
+128    89       88     0.015625   0.015625   1.0000   +0.000
+ROI  40 px: f_moy code = 0.2873 (+8.06 % vs analytique 0.2659) ; brut 0..Nyq = 0.2856
+ROI  48 px: f_moy code = 0.2768 (+4.10 % vs analytique 0.2659) ; brut 0..Nyq = 0.2764
+ROI  56 px: f_moy code = 0.2776 (+4.40 % vs analytique 0.2659) ; brut 0..Nyq = 0.2772
+ROI  64 px: f_moy code = 0.2719 (+2.26 % vs analytique 0.2659) ; brut 0..Nyq = 0.2718
+ROI  72 px: f_moy code = 0.2733 (+2.78 % vs analytique 0.2659) ; brut 0..Nyq = 0.2727
+ROI  88 px: f_moy code = 0.2704 (+1.71 % vs analytique 0.2659) ; brut 0..Nyq = 0.2705
+ROI  96 px: f_moy code = 0.2674 (+0.58 % vs analytique 0.2659) ; brut 0..Nyq = 0.2673
+ROI 128 px: f_moy code = 0.2676 (+0.64 % vs analytique 0.2659) ; brut 0..Nyq = 0.2673
+
+====================================================================================================
+E. MOYENNE RADIALE : 37 angles (0 et 360 doublon), interpolation, zeros hors matrice
+====================================================================================================
+isotrope f exp(-(f/0.3)^2): f_moy code(37 angles) = 0.26599 ; 3600 angles = 0.26595 (+0.017 %) ; sans zeros hors matrice = 0.26595 (+0.002 %) ; limite 0..Nyq = 0.26594
+   max ecart relatif code vs 3600 angles sur f<=Nyq: 3.559 %
+anisotrope (fx/0.4, fy/0.25): f_moy code(37 angles) = 0.29424 ; 3600 angles = 0.29157 (+0.913 %) ; sans zeros hors matrice = 0.29162 (+0.016 %) ; limite 0..Nyq = 0.29149
+   max ecart relatif code vs 3600 angles sur f<=Nyq: 11.384 %
+spectre plat 25: NPS radial code au-dela de Nyquist = [13.5135 13.5135 10.8108  8.1081  5.4054  5.4054  5.4054  5.4054  2.7027  0.      0.      0.    ]
+   f_moy code (0..1.375Nyq, zeros hors matrice) = 0.5541 vs theorie 1D plat 0..Nyq = 0.5
+
+====================================================================================================
+F. EFFET DU DETRENDING ORDRE 2 vs SOUSTRACTION DE LA MOYENNE sur f_moy
+====================================================================================================
+f_moy brut 0..Nyq: detrend ordre 2 = 0.2772 ; moyenne seule = 0.2722 ; analytique = 0.2659
+f_moy fit code   : detrend ordre 2 = 0.2776 ; moyenne seule = 0.2742
+premiers bins (f=0, 0.031, 0.0625, 0.094): detrend [  0.      35.4207  83.5544 119.9534] ; moyenne seule [  0.      62.4723  88.9901 121.809 ]
+puissance totale 1D: detrend 58.597 ; moyenne seule 59.904 (-2.18 %)
+
+====================================================================================================
+G. SENSIBILITE DE f_moy A UN DECALAGE D'UN DEMI-BIN DE L'AXE DE FREQUENCE (hypothese pour l'ecart ANSM)
+====================================================================================================
+f0=0.3 dx=0.5: f_moy = 0.2776, demi-bin = 0.0181 -> decalage relatif = +6.52 %
+f0=0.2 dx=0.5: f_moy = 0.1911, demi-bin = 0.0181 -> decalage relatif = +9.47 %
+f0=0.4 dx=0.5: f_moy = 0.3625, demi-bin = 0.0181 -> decalage relatif = +4.99 %
+f0=0.3 dx=0.7: f_moy = 0.2702, demi-bin = 0.0129 -> decalage relatif = +4.78 %
+f0=0.3 dx=0.25: f_moy = 0.3016, demi-bin = 0.0168 -> decalage relatif = +5.56 %
+
+====================================================================================================
+H. CAS LIMITES : image constante, nombre de coupes, 1024, ROI impaire
+====================================================================================================
+image constante: f_moy = 0.0, NPS max = 0.0, total = 0.0
+slice_range=(0, 0): coupes=1, f_moy=0.2838
+slice_range=(0, 2): coupes=3, f_moy=0.2780
+slice_range=(0, 8): coupes=9, f_moy=0.2774
+slice_range=(0, 9): coupes=10, f_moy=0.2776
+ROI 63 px: ValueError No valid ROIs could be processed.
+5 coupes, appel par defaut -> NPS analysis requires at least 10 slices, but series only has 5.
+20 coupes: coupes SPB par defaut = indices 5..14 (centre 9.5), coupe centrale = 9
+21 coupes: coupes SPB par defaut = indices 5..14 (centre 9.5), coupe centrale = 10
+
+FIN t1

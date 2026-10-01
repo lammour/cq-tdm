@@ -1,0 +1,83 @@
+
+====================================================================================================
+A. GEOMETRIE DES ROI UH vs decision 9.1.7 (tailles, position du bord externe)
+====================================================================================================
+D=200mm dx=0.5: centrale 80.0 mm (40.0 % ; cible 40 %) ; periph 20.0 mm (10.0 % <=10 %) ~1256 px (>=100) ; bord externe a 12.50 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 64 px = 32.0 mm (16.0 % D)
+D=200mm dx=0.469: centrale 79.7 mm (39.9 % ; cible 40 %) ; periph 19.7 mm (9.8 % <=10 %) ~1385 px (>=100) ; bord externe a 12.30 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 64 px = 30.0 mm (15.0 % D)
+D=160mm dx=0.4: centrale 64.0 mm (40.0 % ; cible 40 %) ; periph 16.0 mm (10.0 % <=10 %) ~1256 px (>=100) ; bord externe a 12.40 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 64 px = 25.6 mm (16.0 % D)
+D=300mm dx=0.7: centrale 119.0 mm (39.7 % ; cible 40 %) ; periph 29.4 mm (9.8 % <=10 %) ~1385 px (>=100) ; bord externe a 12.80 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 64 px = 44.8 mm (14.9 % D)
+D=160mm dx=1.172: centrale 63.3 mm (39.6 % ; cible 40 %) ; periph 14.1 mm (8.8 % <=10 %) ~113 px (>=100) ; bord externe a 12.02 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 32 px = 37.5 mm (23.4 % D)
+D=200mm dx=0.234: centrale 79.6 mm (39.8 % ; cible 40 %) ; periph 19.7 mm (9.8 % <=10 %) ~5541 px (>=100) ; bord externe a 12.48 mm de la paroi (10-15) ; chevauchement centre/periph: False ; NPS ROI 128 px = 30.0 mm (15.0 % D)
+
+====================================================================================================
+B. FANTOME SYNTHETIQUE : moyenne, uniformite, bruit (valeurs attendues analytiques)
+====================================================================================================
+detection: centre=(262.41,249.58) attendu (262.3,249.6) ; rayon=199.59 px attendu 200 ; points=72
+ROI centrale r=79px: mesure 2.458 HU, attendu 2.390 (+/- 0.057 stat) ; n=19577 px
+ROI periph  r=19px d=156px: moyennes [5.07, 5.05, 5.18, 4.94] attendu 5.065 (+/- 0.238)
+uniformite code = 2.722 (max |periph - centre|) attendu ~2.675
+bruit code (std ROI centrale, ddof=0) = 8.0001 ; sigma vrai = 8.0 ; ddof=1 donnerait x1.000026
+nombre CT eau = 2.458 -> statut ok
+masque r=80: 20081 px vs pi r^2 = 20106 (bord inclus '<=' -> +-25 px, -0.13 %)
+
+====================================================================================================
+C. BRUIT : ROI centrale 40 % sur 1 coupe vs ROI SPB sur 10 coupes (definition ANSM 9.1.7.2)
+====================================================================================================
+sigma vrai = 8.0 ; cupping 5.0 HU au bord
+std ROI centrale (1 coupe, coupe 5) = 8.0668 ; sur les 10 coupes: moy 8.0218, min 7.9792, max 8.0668, etendue 1.09 %
+std des 80 ROI SPB 64px: moy 8.0035, ecart-type entre ROI 0.1042 ; moyenne quadratique 8.0042
+bruit correle (f0=0.3): std ROI centrale par coupe = [7.969  7.9572 7.9546 7.953  8.0198 8.015  8.062  7.9067 7.9543 8.0921] ; etendue 2.32 % ; moyenne 7.9884
+   std moyen des 80 ROI SPB = 7.9814 ; sqrt(AUC NPS2D) = 7.9666
+
+====================================================================================================
+D. STATUTS : bornes, inclusivite, arrondis d'affichage
+====================================================================================================
+nombre CT +6.9500000 -> affiche '+7,0 HU' -> statut ok ; analyze: acceptable=True ncg=False
+nombre CT +7.0000000 -> affiche '+7,0 HU' -> statut ok ; analyze: acceptable=True ncg=False
+nombre CT +7.0000001 -> affiche '+7,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT +7.0400000 -> affiche '+7,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT +7.0500000 -> affiche '+7,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT +24.9600000 -> affiche '+25,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT +25.0000000 -> affiche '+25,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT +25.0400000 -> affiche '+25,0 HU' -> statut ncg ; analyze: acceptable=False ncg=True
+nombre CT -25.0000000 -> affiche '-25,0 HU' -> statut nc ; analyze: acceptable=False ncg=False
+nombre CT -7.0000000 -> affiche '-7,0 HU' -> statut ok ; analyze: acceptable=True ncg=False
+decision: NCG si CT <= -25 ou 25 <= CT (borne 25 incluse dans NCG) ; NC si 7 < |CT| <= 25 ; conforme si |CT| <= 7
+uniformite 6.96 -> affiche '7,0' -> ok
+uniformite 7.0 -> affiche '7,0' -> ok
+uniformite 7.04 -> affiche '7,0' -> nc
+bruit ref=1.5 val=1.7 ecart=+0.20000 affiche '+0,20' bornes [-0.200,+0.200] -> ok
+bruit ref=1.5 val=1.70000001 ecart=+0.20000 affiche '+0,20' bornes [-0.200,+0.200] -> nc
+bruit ref=1.5 val=1.705 ecart=+0.20500 affiche '+0,21' bornes [-0.200,+0.200] -> nc
+bruit ref=3.0 val=3.3 ecart=+0.30000 affiche '+0,30' bornes [-0.300,+0.300] -> ok
+bruit ref=3.0 val=3.304 ecart=+0.30400 affiche '+0,30' bornes [-0.300,+0.300] -> nc
+bruit ref=3.0 val=3.305 ecart=+0.30500 affiche '+0,31' bornes [-0.300,+0.300] -> nc
+bruit ref=3.0 val=2.7 ecart=-0.30000 affiche '-0,30' bornes [-0.300,+0.300] -> ok
+bruit ref=2.0 val=2.2 ecart=+0.20000 affiche '+0,20' bornes [-0.200,+0.200] -> ok
+SPB ref=0.3 val=0.33 ecart=+10.000 % affiche '+10,0 %' -> ok
+SPB ref=0.3 val=0.3300004 ecart=+10.000 % affiche '+10,0 %' -> nc
+SPB ref=0.3 val=0.3305 ecart=+10.167 % affiche '+10,2 %' -> nc
+SPB ref=0.3 val=0.27 ecart=-10.000 % affiche '-10,0 %' -> ok
+SPB ref=0.3 val=0.2695 ecart=-10.167 % affiche '-10,2 %' -> nc
+bandes de tolerance: (1.8, 2.2, 2.0) (0.8, 1.2, 1.0) (0.27, 0.33, 0.3) (-7.0, 7.0, None) (0.0, 7.0, None)
+reference 2.0049 -> champ texte '2,00' / '2,005' -> reparse 2.0 / 2.005
+reference 2.005 -> champ texte '2,00' / '2,005' -> reparse 2.0 / 2.005
+reference 0.26278 -> champ texte '0,26' / '0,263' -> reparse 0.26 / 0.263
+
+====================================================================================================
+E. DETECTION : robustesse au bruit eleve et a une paroi faible
+====================================================================================================
+sigma=8 paroi=120 HU: rayon=199.82 (attendu 200) centre=(256.00,256.00) points=72
+sigma=25 paroi=120 HU: rayon=199.71 (attendu 200) centre=(255.99,255.98) points=72
+sigma=40 paroi=120 HU: rayon=199.56 (attendu 200) centre=(255.97,255.99) points=57
+sigma=60 paroi=120 HU: rayon=72.58 (attendu 200) centre=(279.29,388.53) points=56
+sigma=25 paroi=60 HU: rayon=201.06 (attendu 200) centre=(255.99,255.99) points=72
+sigma=25 paroi=40 HU: rayon=206.20 (attendu 200) centre=(256.00,256.00) points=72
+sigma=25 paroi=-100 HU: rayon=199.94 (attendu 200) centre=(255.96,256.03) points=72
+erreur rayon -2.0 px -> bord externe ROI periph a 13.50 mm de la vraie paroi (10-15 requis) ; ROI centrale r=79
+erreur rayon -1.0 px -> bord externe ROI periph a 13.00 mm de la vraie paroi (10-15 requis) ; ROI centrale r=79
+erreur rayon +0.0 px -> bord externe ROI periph a 12.50 mm de la vraie paroi (10-15 requis) ; ROI centrale r=80
+erreur rayon +1.0 px -> bord externe ROI periph a 12.00 mm de la vraie paroi (10-15 requis) ; ROI centrale r=80
+erreur rayon +2.0 px -> bord externe ROI periph a 11.50 mm de la vraie paroi (10-15 requis) ; ROI centrale r=80
+
+FIN t2
