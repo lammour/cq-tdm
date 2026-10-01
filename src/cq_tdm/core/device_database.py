@@ -9,6 +9,7 @@ from typing import Optional
 from PySide6.QtCore import QStandardPaths
 
 from .qc_history import QCRun
+from .roi_geometry import ROIGeometry
 
 
 @dataclass
@@ -41,19 +42,27 @@ class DeviceConfig:
     nps_start_slice: int | None = None  # NPS analysis start slice
     nps_end_slice: int | None = None  # NPS analysis end slice
 
+    # ROI sizes and offsets frozen from the reference control, so that every
+    # later control uses identical ROIs (see core.roi_geometry)
+    roi_geometry: ROIGeometry | None = None
+
     # Recorded QC controls, newest last (see qc_history.QCRun)
     runs: list[QCRun] = field(default_factory=list)
 
+    _NESTED = ("runs", "roi_geometry")
+
     def to_dict(self) -> dict:
-        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "runs"}
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in self._NESTED}
+        d["roi_geometry"] = self.roi_geometry.to_dict() if self.roi_geometry else None
         d["runs"] = [r.to_dict() for r in self.runs]
         return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "DeviceConfig":
-        known = {f.name for f in fields(cls)} - {"runs"}
+        known = {f.name for f in fields(cls)} - set(cls._NESTED)
         # Ignore unknown keys so a file written by a newer version still loads
         device = cls(**{k: v for k, v in data.items() if k in known})
+        device.roi_geometry = ROIGeometry.from_dict(data.get("roi_geometry"))
         device.runs = [QCRun.from_dict(r) for r in data.get("runs", []) if isinstance(r, dict)]
         return device
 

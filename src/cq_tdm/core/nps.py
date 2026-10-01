@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
 
-from .dicom_loader import DicomImage, DicomSeries, detect_phantom_center, estimate_phantom_diameter
+from .dicom_loader import DicomImage, DicomSeries, detect_phantom, detect_phantom_center
+from .roi_geometry import ROIGeometry
 
 # numpy 2.0 renamed trapz -> trapezoid; scipy.integrate.trapezoid gives identical
 # results but pulls in scipy.linalg/sparse/optimize, which are excluded from the
@@ -149,6 +150,8 @@ class NPSResult:
     # 0-based indices of ROIs that were clipped by the image border on at least
     # one slice and therefore did not contribute to the spectrum
     skipped_rois: list[int] = field(default_factory=list)
+    # ROI geometry the positions were built from (None when positions were given)
+    geometry: Optional[ROIGeometry] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for reporting."""
@@ -410,37 +413,47 @@ def fit_nps_polynomial(
 def calculate_nps_roi_positions(
     image: DicomImage,
     center: Optional[tuple[int, int]] = None,
-    roi_size: int = 64,
+    roi_size: Optional[int] = None,
+    radius_pixels: Optional[float] = None,
+    geometry: Optional[ROIGeometry] = None,
 ) -> list[NPSROIPosition]:
     """
     Calculate positions for 8 NPS ROIs in octagonal pattern.
 
-    Based on analysis of ANSM reference data, ROIs are positioned:
-    - 4 cardinal ROIs (top, bottom, left, right) at ~42% of phantom radius
-    - 4 diagonal ROIs (corners) at ~34% of radius in each axis
+    Sizes and offsets come from ROIGeometry (rules derived from the ANSM
+    reference ROI files, relative to the INNER radius of the phantom):
+    - side = 15 % of the inner diameter, rounded to 8 px, within 32-128 px
+      (64 px on every ANSM reference series)
+    - 4 cardinal ROIs (top, bottom, left, right) at ~45.5% of the radius
+    - 4 diagonal ROIs (corners) at ~36.7% of the radius in each axis
 
     Args:
         image: DicomImage to analyze.
         center: (row, col) phantom center. Auto-detected if None.
-        roi_size: Side length of square ROIs in pixels.
+        roi_size: Side length in pixels; overrides the rule when given.
+        radius_pixels: Inner phantom radius in pixels. Detected if None.
+        geometry: Frozen ROI geometry to reuse (only the centre is detected then).
 
     Returns:
         List of 8 NPSROIPosition objects.
     """
-    if center is None:
-        center = detect_phantom_center(image)
+    if geometry is None:
+        if center is None or radius_pixels is None:
+            detected = detect_phantom(image, initial_center=center)
+            if center is None:
+                center = detected.center
+            if radius_pixels is None:
+                radius_pixels = detected.radius
+        geometry = ROIGeometry.from_phantom(
+            2 * radius_pixels, image.pixel_size_mm, image.rows, image.columns)
+    elif center is None:
+        center = detect_phantom(image).center
 
     center_row, center_col = center
-
-    # Estimate phantom diameter
-    diameter_pixels = estimate_phantom_diameter(image, center)
-    radius_pixels = diameter_pixels / 2
-
-    # ROI positioning based on ANSM reference data analysis:
-    # - Cardinal ROIs at ~42% of radius from center
-    # - Diagonal ROIs at ~34% of radius in each axis direction
-    cardinal_distance = int(radius_pixels * 0.42)
-    diagonal_offset = int(radius_pixels * 0.34)
+    if roi_size is None:
+        roi_size = geometry.nps_roi_size
+    cardinal_distance = geometry.nps_cardinal_distance
+    diagonal_offset = geometry.nps_diagonal_offset
 
     # Create 8 ROI positions in the same order as JSON files:
     # 1-4: Diagonal corners (top-left, bottom-right, bottom-left, top-right)
@@ -496,10 +509,11 @@ def calculate_nps_roi_positions(
 def analyze_nps(
     series: DicomSeries,
     num_slices: int = 10,
-    roi_size: int = 64,
+    roi_size: Optional[int] = None,
     center: Optional[tuple[int, int]] = None,
     slice_range: Optional[tuple[int, int]] = None,
     roi_positions: Optional[list[NPSROIPosition]] = None,
+    geometry: Optional[ROIGeometry] = None,
 ) -> NPSResult:
     """
     Perform NPS analysis on a series of slices using 8 ROIs.
@@ -507,11 +521,14 @@ def analyze_nps(
     Args:
         series: DicomSeries containing water phantom images.
         num_slices: Number of slices to use (default 10 per ANSM). Ignored if slice_range provided.
-        roi_size: Size of square ROI in pixels (default 64 per ANSM standard).
+        roi_size: Size of square ROI in pixels. Default: from the ROI geometry
+            (15 % of the inner phantom diameter; 64 px on the ANSM series).
         center: Phantom center. Auto-detected from middle slice if None.
         slice_range: Optional (start, end) indices (0-based, inclusive). If None, uses central slices.
         roi_positions: Optional list of pre-defined ROI positions. If None, positions are
             auto-calculated based on phantom geometry.
+        geometry: Frozen ROI geometry of the installation, reused as is (same
+            sizes and offsets as the reference control, only the centre is detected).
 
     Returns:
         NPSResult with NPS data and metrics.
@@ -541,18 +558,24 @@ def analyze_nps(
 
     # Get center from middle slice if not provided
     middle_slice = slices[len(slices) // 2]
+    phantom = detect_phantom(middle_slice, initial_center=center)
     if center is None:
-        center = detect_phantom_center(middle_slice)
+        center = phantom.center
 
     pixel_size = middle_slice.pixel_size_mm
 
     # Use provided ROI positions or calculate them
     if roi_positions is None:
-        roi_positions = calculate_nps_roi_positions(middle_slice, center, roi_size)
+        if geometry is None:
+            geometry = ROIGeometry.from_phantom(
+                phantom.diameter, pixel_size, middle_slice.rows, middle_slice.columns)
+        roi_positions = calculate_nps_roi_positions(
+            middle_slice, center, roi_size, geometry=geometry)
+    else:
+        geometry = None  # positions imposed by the caller: not our geometry
 
-    # Determine ROI size from positions (use first ROI's size, or default)
-    if roi_positions:
-        roi_size = roi_positions[0].side_square
+    # The ROI size is the one of the positions (given or computed)
+    roi_size = roi_positions[0].side_square
 
     # Extract and process ROIs from all slices
     # Also collect statistics for uniformity checking
@@ -647,7 +670,8 @@ def analyze_nps(
     total_noise_power = np.sum(nps_radial) * df
 
     # Build ROI configuration for export
-    phantom_diameter = estimate_phantom_diameter(middle_slice, center) * pixel_size
+    # Inner (water) diameter; the ANSM files give the nominal outer diameter
+    phantom_diameter = phantom.diameter * pixel_size
     # Get slice positions in mm from DICOM slice_location
     slice_start_mm = slices[0].slice_location
     slice_end_mm = slices[-1].slice_location
@@ -679,6 +703,7 @@ def analyze_nps(
         roi_config=roi_config,
         roi_warnings=roi_warnings,
         skipped_rois=sorted(skipped_rois),
+        geometry=geometry,
     )
 
 

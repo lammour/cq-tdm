@@ -68,6 +68,8 @@ class QCRun:
     hu_slice_index: int | None = None
     nps_start_slice: int | None = None
     nps_end_slice: int | None = None
+    # ROI sizes and offsets used (core.roi_geometry.ROIGeometry.to_dict())
+    roi_geometry: dict | None = None
 
     pdf_path: str = ""
     # Folder the series was analysed from, so the report can be rebuilt from the

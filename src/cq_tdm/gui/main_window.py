@@ -4,8 +4,8 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QShortcut, QKeySequence, QFont
+from PySide6.QtCore import Qt, QTimer, QRegularExpression
+from PySide6.QtGui import QShortcut, QKeySequence, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -51,8 +51,8 @@ from ..core import (
     WaterPhantomResults,
     analyze_nps,
     NPSResult,
-    detect_phantom_center,
-    estimate_phantom_diameter,
+    detect_phantom,
+    ROIGeometry,
 )
 
 # Report imports - deferred via lazy __init__.py (reportlab)
@@ -73,6 +73,15 @@ _theme_colors = theme_colors
 
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
+
+
+def _iso_to_fr(date_iso: str) -> str:
+    """ISO date to JJ/MM/AAAA; the input unchanged when it is not a date."""
+    from datetime import date
+    try:
+        return date.fromisoformat(date_iso[:10]).strftime("%d/%m/%Y")
+    except ValueError:
+        return date_iso
 
 class DeviceManagerDialog(QDialog):
     """Dialog for managing saved CT installations."""
@@ -1015,10 +1024,15 @@ class MainWindow(QMainWindow):
         self._edit_inventory_number = QLineEdit()
         self._edit_inventory_number.setPlaceholderText("Numéro d'inventaire")
 
-        # Reference values for stability tests
-        from PySide6.QtGui import QDoubleValidator
-        ref_validator = QDoubleValidator()
-        ref_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        # Reference values for stability tests.
+        # Not a QDoubleValidator: it follows the system locale, so outside a
+        # French locale the comma is taken for a thousands separator and its
+        # fixup() rewrites the field on Enter/focus loss ("4,52" -> "452",
+        # "1234,5" -> "12,345"); in a French locale it rejects the dot and
+        # inserts narrow spaces. This regex accepts both separators, nothing else.
+        # No sign: σ and a mean frequency are never negative.
+        ref_validator = QRegularExpressionValidator(
+            QRegularExpression(r"\d*[.,]?\d*"))
         self._edit_ref_noise = QLineEdit()
         self._edit_ref_noise.setPlaceholderText("Bruit de référence (HU)")
         self._edit_ref_noise.setValidator(ref_validator)
@@ -2084,8 +2098,8 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
             else:
                 return
 
-            # Run HU analysis
-            rois = calculate_rois(hu_image)
+            # Run HU analysis, with the installation's frozen ROI geometry when it applies
+            rois = calculate_rois(hu_image, geometry=self._geometry_for_analysis(hu_image))
             results = analyze_water_phantom(hu_image, rois)
             self._current_results = results
 
@@ -2128,7 +2142,9 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         try:
             self.statusbar.showMessage("Analyse SPB en cours...")
             # Run NPS analysis with new range
-            nps_result = analyze_nps(self._current_series, slice_range=(start, end))
+            nps_result = analyze_nps(
+                self._current_series, slice_range=(start, end),
+                geometry=self._geometry_for_analysis(self._current_series.images[start]))
             self._nps_results = nps_result
 
             # Display NPS ROI
@@ -2190,11 +2206,15 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
         viewer.set_debug_mode(self._debug_mode)
 
         if self._debug_mode and self._current_image is not None:
-            # Detect phantom center and diameter
-            center = detect_phantom_center(self._current_image)
-            diameter = estimate_phantom_diameter(self._current_image, center)
-            radius = diameter / 2
-            viewer.set_debug_phantom(center, radius)
+            # Detect on the HU analysis slice, the one the ROIs are computed
+            # from, so the drawn circle is the geometry the ROIs actually use
+            image = self._current_image
+            if self._current_series is not None:
+                hu_index = self.image_viewer.get_hu_slice_index()
+                if 0 <= hu_index < self._current_series.num_images:
+                    image = self._current_series.images[hu_index]
+            geometry = detect_phantom(image)
+            viewer.set_debug_phantom(geometry.center, geometry.radius)
         else:
             viewer.set_debug_phantom(None, None)
 
@@ -2302,6 +2322,61 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             return
         self.history_panel.set_runs(list(device.runs), device.reference_noise, device.reference_nps_freq)
 
+    def _geometry_for_analysis(self, image) -> ROIGeometry | None:
+        """The installation's frozen ROI geometry, if it fits this image format.
+
+        Sizes and positions of the ROIs must be identical from one control to
+        the next (ANSM). A geometry frozen for another matrix or pixel size is
+        unusable: the ROIs are then recomputed and the results panel says so.
+        """
+        self._geometry_mismatch = False
+        device = self._current_device
+        if device is None or device.roi_geometry is None or image is None:
+            return None
+        if device.roi_geometry.matches(image):
+            return device.roi_geometry
+        self._geometry_mismatch = True
+        return None
+
+    def _freeze_roi_geometry(self, geometry: ROIGeometry | None) -> bool:
+        """Make `geometry` the installation's ROI geometry (in memory only).
+
+        Returns True when the device changed; the caller saves it.
+        """
+        if geometry is None or self._current_device is None:
+            return False
+        self._current_device.roi_geometry = geometry
+        # What is on screen was measured with these very sizes: show it as frozen
+        if self._current_results is not None and self._current_results.geometry is not None:
+            self._current_results.geometry = geometry
+        if self._nps_results is not None and self._nps_results.geometry is not None:
+            self._nps_results.geometry = geometry
+        return True
+
+    @staticmethod
+    def _run_geometry(run: QCRun | None) -> ROIGeometry | None:
+        """The ROI geometry recorded with a run, marked as frozen from that run."""
+        if run is None:
+            return None
+        geometry = ROIGeometry.from_dict(run.roi_geometry)
+        if geometry is not None and not geometry.is_frozen:
+            geometry = geometry.frozen(run.run_date)
+        return geometry
+
+    def _format_roi_geometry_html(self) -> str:
+        """One table row saying where the ROI sizes and positions come from."""
+        r = self._current_results
+        if r is None:
+            return ""
+        if getattr(self, "_geometry_mismatch", False):
+            text = ('<span class="nc">recalculées : format d\'image différent de la '
+                    'référence (matrice ou taille de pixel)</span>')
+        elif r.geometry is not None and r.geometry.is_frozen:
+            text = f"figées depuis le contrôle du {_iso_to_fr(r.geometry.frozen_date)}"
+        else:
+            text = "calculées sur cette série (figées à la définition de la référence)"
+        return f'<tr><th>Tailles et positions</th><td>{text}</td></tr>'
+
     def _current_run_for_history(self) -> QCRun | None:
         """Build a QCRun from the measurement on screen, or None if nothing is analysed yet."""
         if self._current_results is None:
@@ -2329,6 +2404,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             artifacts_present=self._artifact_result,
             artifacts_description=self._artifact_description if self._artifact_result else "",
             hu_slice_index=self.image_viewer.get_hu_slice_index(),
+            roi_geometry=(self._current_results.geometry.to_dict()
+                          if self._current_results.geometry is not None else None),
             nps_start_slice=nps_start if self._nps_results is not None else None,
             nps_end_slice=nps_end if self._nps_results is not None else None,
             dicom_folder=self._current_folder,
@@ -2352,6 +2429,10 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         ref_nps_text = self._edit_ref_nps_freq.text().strip()
         run.ref_noise = parse_float_fr(ref_noise_text) if ref_noise_text else None
         run.ref_nps_freq = parse_float_fr(ref_nps_text) if ref_nps_text else None
+        # First recorded control: its ROI sizes and positions become the ones
+        # every later control must reuse (add_run saves the device)
+        if self._current_device.roi_geometry is None:
+            self._freeze_roi_geometry(self._run_geometry(run))
         try:
             replaced = self._device_db.add_run(self._current_device.device_id, run)
         except OSError as e:
@@ -2364,11 +2445,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         return " · contrôle remplacé dans l'historique" if replaced else " · contrôle ajouté à l'historique"
 
     def _confirm_and_set_references(self, noise: float, nps_freq: float | None,
-                                    source: str) -> bool:
+                                    source: str, geometry: ROIGeometry | None = None) -> bool:
         """Ask, then make `noise`/`nps_freq` the reference values of the device.
 
         `source` names where the values come from, for the question and the
-        status bar. Returns True when the values were applied.
+        status bar. `geometry` is the ROI geometry of the reference control; it
+        is frozen on the device with the values. Returns True when applied.
         """
         nps_text = f" et f SPB = {format_fr(nps_freq, 3)} c/mm" if nps_freq is not None else ""
         answer = QMessageBox.question(
@@ -2388,6 +2470,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             # two disagree
             if nps_freq is not None:
                 self._current_device.reference_nps_freq = nps_freq
+            self._freeze_roi_geometry(geometry)
             try:
                 self._device_db.save_device(self._current_device)
             except OSError as e:
@@ -2398,13 +2481,15 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_ref_nps_freq = self._edit_ref_nps_freq.text()
         self._update_save_button_style()
         self._update_install_summary()
+        self._update_results_display()
         self.statusbar.showMessage(f"Valeurs de référence définies depuis {source}", 5000)
         return True
 
     def _apply_reference_from_history(self, run: QCRun):
         """Make a past run's noise and SPB frequency the device reference values."""
         self._confirm_and_set_references(run.noise, run.nps_freq,
-                                         f"contrôle du {run.date_fr()}")
+                                         f"contrôle du {run.date_fr()}",
+                                         geometry=self._run_geometry(run))
 
     def _on_install_summary_link(self, href: str):
         """Handle the links embedded in the summary under the device selector."""
@@ -2426,7 +2511,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             return
         nps_freq = self._nps_results.mean_frequency if self._nps_results is not None else None
         if self._confirm_and_set_references(self._current_results.noise, nps_freq,
-                                            "analyse en cours"):
+                                            "analyse en cours",
+                                            geometry=self._run_geometry(self._current_run_for_history())):
             self._update_reference_button_state()
 
     def _update_reference_button_state(self):
@@ -2687,6 +2773,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                 <tr><td>6h</td><td>{format_fr(r.bottom.mean_hu, 1, sign=True)}</td><td>{format_fr(r.bottom.std_hu, 1)}</td></tr>
                 <tr><td>9h</td><td>{format_fr(r.left.mean_hu, 1, sign=True)}</td><td>{format_fr(r.left.std_hu, 1)}</td></tr>
             </table>
+            <table>
+                {self._format_roi_geometry_html()}
+            </table>
         </div>
         """
 
@@ -2742,7 +2831,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             <table>
                 <tr><th>Coupes analysées</th><td class="value">{r.num_slices}</td></tr>
                 <tr><th>Nombre de ROIs</th><td class="value">{num_rois}</td></tr>
-                <tr><th>Taille ROI</th><td class="value">{r.roi_size} × {r.roi_size} px</td></tr>
+                <tr><th>Taille ROI</th><td class="value">{r.roi_size} × {r.roi_size} px{" (figée)" if r.geometry is not None and r.geometry.is_frozen else ""}</td></tr>
                 <tr><th>Fréquence moyenne</th><td class="value">{format_fr(r.mean_frequency, 3)} cycles/mm</td></tr>
                 {self._format_nps_stability_html(r.mean_frequency)}
             </table>

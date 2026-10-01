@@ -24,8 +24,12 @@ _LAZY_IMPORTS = {
     "DicomSeries": ".dicom_loader",
     "load_dicom_file": ".dicom_loader",
     "load_dicom_folder": ".dicom_loader",
+    "PhantomGeometry": ".dicom_loader",
+    "detect_phantom": ".dicom_loader",
     "detect_phantom_center": ".dicom_loader",
     "estimate_phantom_diameter": ".dicom_loader",
+    # roi_geometry
+    "ROIGeometry": ".roi_geometry",
     # water_phantom
     "ROIDefinition": ".water_phantom",
     "ROIMeasurement": ".water_phantom",

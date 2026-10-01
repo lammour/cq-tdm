@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from typing import Optional
 import numpy as np
 
-from .dicom_loader import DicomImage, detect_phantom_center, estimate_phantom_diameter
+from .dicom_loader import DicomImage, detect_phantom
+from .roi_geometry import ROIGeometry, PERIPHERAL_DISTANCE_MM
 
 
 @dataclass
@@ -58,6 +59,8 @@ class WaterPhantomROIs:
     right: ROIDefinition  # 3h
     bottom: ROIDefinition  # 6h
     left: ROIDefinition  # 9h
+    # Sizes and offsets the ROIs were built from (frozen on the device or computed)
+    geometry: Optional[ROIGeometry] = None
 
     @property
     def peripheral(self) -> list[ROIDefinition]:
@@ -92,6 +95,9 @@ class WaterPhantomResults:
     # Uniformity has no "grave" tier in the ANSM decision (only ±7 HU)
     uniformity_acceptable: bool = True  # Within ±7 HU from center
 
+    # ROI geometry used for the measurement
+    geometry: Optional[ROIGeometry] = None
+
     @property
     def peripheral(self) -> list[ROIMeasurement]:
         return [self.top, self.right, self.bottom, self.left]
@@ -118,7 +124,8 @@ def calculate_rois(
     image: DicomImage,
     center: Optional[tuple[int, int]] = None,
     diameter_pixels: Optional[float] = None,
-    peripheral_distance_mm: float = 12.5,  # 10-15mm from wall, use middle
+    peripheral_distance_mm: float = PERIPHERAL_DISTANCE_MM,
+    geometry: Optional[ROIGeometry] = None,
 ) -> WaterPhantomROIs:
     """
     Calculate ROI positions for water phantom analysis.
@@ -126,82 +133,47 @@ def calculate_rois(
     Args:
         image: DicomImage to analyze.
         center: (row, col) phantom center. Auto-detected if None.
-        diameter_pixels: Phantom diameter in pixels. Auto-detected if None.
-        peripheral_distance_mm: Distance from wall for peripheral ROIs.
+        diameter_pixels: Inner phantom diameter in pixels. Auto-detected if None
+            (ignored when `geometry` is given).
+        peripheral_distance_mm: Outer edge of the peripheral ROIs to the inner wall.
+        geometry: Frozen ROI sizes and offsets to reuse (same installation, same
+            image format). Only the centre is detected then, so sizes and
+            positions relative to the phantom are identical to the reference.
 
     Returns:
         WaterPhantomROIs with all ROI definitions.
     """
-    # Auto-detect center if not provided
-    if center is None:
-        center = detect_phantom_center(image)
+    # The decision places the peripheral ROIs 10-15 mm from the INNER wall:
+    # detect_phantom measures the water disc, not the outer edge of the wall
+    if geometry is None:
+        if center is None or diameter_pixels is None:
+            detected = detect_phantom(image, initial_center=center)
+            if center is None:
+                center = detected.center
+            if diameter_pixels is None:
+                diameter_pixels = detected.diameter
+        geometry = ROIGeometry.from_phantom(
+            diameter_pixels, image.pixel_size_mm, image.rows, image.columns,
+            peripheral_distance_mm)
+    elif center is None:
+        center = detect_phantom(image).center
 
     center_row, center_col = center
+    g = geometry
 
-    # Auto-detect diameter if not provided
-    if diameter_pixels is None:
-        diameter_pixels = estimate_phantom_diameter(image, center)
+    central = ROIDefinition(center_row=center_row, center_col=center_col,
+                            radius=g.central_radius, name="Centre")
+    top = ROIDefinition(center_row=center_row - g.peripheral_distance, center_col=center_col,
+                        radius=g.peripheral_radius, name="12h (Haut)")
+    right = ROIDefinition(center_row=center_row, center_col=center_col + g.peripheral_distance,
+                          radius=g.peripheral_radius, name="3h (Droite)")
+    bottom = ROIDefinition(center_row=center_row + g.peripheral_distance, center_col=center_col,
+                           radius=g.peripheral_radius, name="6h (Bas)")
+    left = ROIDefinition(center_row=center_row, center_col=center_col - g.peripheral_distance,
+                         radius=g.peripheral_radius, name="9h (Gauche)")
 
-    radius_pixels = diameter_pixels / 2
-    pixel_size = image.pixel_size_mm
-
-    # Central ROI: 40% of phantom diameter
-    central_radius = int(diameter_pixels * 0.4 / 2)
-
-    # Peripheral ROIs: ≤10% of diameter, min 100 pixels area
-    peripheral_radius = int(diameter_pixels * 0.10 / 2)
-    # Ensure minimum area of 100 pixels: area = pi * r^2 >= 100 => r >= sqrt(100/pi) ≈ 5.64
-    min_radius = int(np.ceil(np.sqrt(100 / np.pi)))
-    peripheral_radius = max(peripheral_radius, min_radius)
-
-    # Distance from center for peripheral ROIs
-    # Position is radius - (distance_from_wall + peripheral_roi_radius)
-    distance_from_wall_pixels = peripheral_distance_mm / pixel_size
-    peripheral_distance = radius_pixels - distance_from_wall_pixels - peripheral_radius
-
-    # Create ROI definitions
-    central = ROIDefinition(
-        center_row=center_row,
-        center_col=center_col,
-        radius=central_radius,
-        name="Centre",
-    )
-
-    top = ROIDefinition(
-        center_row=int(center_row - peripheral_distance),
-        center_col=center_col,
-        radius=peripheral_radius,
-        name="12h (Haut)",
-    )
-
-    right = ROIDefinition(
-        center_row=center_row,
-        center_col=int(center_col + peripheral_distance),
-        radius=peripheral_radius,
-        name="3h (Droite)",
-    )
-
-    bottom = ROIDefinition(
-        center_row=int(center_row + peripheral_distance),
-        center_col=center_col,
-        radius=peripheral_radius,
-        name="6h (Bas)",
-    )
-
-    left = ROIDefinition(
-        center_row=center_row,
-        center_col=int(center_col - peripheral_distance),
-        radius=peripheral_radius,
-        name="9h (Gauche)",
-    )
-
-    return WaterPhantomROIs(
-        central=central,
-        top=top,
-        right=right,
-        bottom=bottom,
-        left=left,
-    )
+    return WaterPhantomROIs(central=central, top=top, right=right, bottom=bottom, left=left,
+                            geometry=geometry)
 
 
 def create_circular_mask(shape: tuple[int, int], center: tuple[int, int], radius: int) -> np.ndarray:
@@ -306,6 +278,7 @@ def analyze_water_phantom(
     uniformity_acceptable = uniformity <= 7
 
     return WaterPhantomResults(
+        geometry=rois.geometry,
         central=central,
         top=top,
         right=right,
