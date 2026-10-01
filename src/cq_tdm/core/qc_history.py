@@ -70,6 +70,10 @@ class QCRun:
     nps_end_slice: int | None = None
     # ROI sizes and offsets used (core.roi_geometry.ROIGeometry.to_dict())
     roi_geometry: dict | None = None
+    # Corrective action after a non-conformity (ANSM register: date of the
+    # actions taken to restore conformity); date is ISO
+    corrective_action_date: str = ""
+    corrective_action: str = ""
 
     pdf_path: str = ""
     # Folder the series was analysed from, so the report can be rebuilt from the
@@ -107,6 +111,14 @@ class QCRun:
     def from_dict(cls, data: dict) -> "QCRun":
         known = {f.name for f in fields(cls)} - {"is_current"}
         return cls(**{k: v for k, v in data.items() if k in known})
+
+
+def iso_to_fr(date_iso: str) -> str:
+    """ISO date to JJ/MM/AAAA; the input unchanged when it is not a date."""
+    try:
+        return date.fromisoformat(date_iso[:10]).strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        return date_iso or ""
 
 
 def dicom_date_to_iso(dicom_date: str) -> str:

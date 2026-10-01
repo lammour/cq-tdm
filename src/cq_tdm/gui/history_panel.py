@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.app_config import get_app_config
-from ..core.qc_history import METRICS, NC, NCG, OK, STATUS_SHORT, QCRun, evaluate_run
+from ..core.qc_history import METRICS, NC, NCG, OK, STATUS_SHORT, QCRun, evaluate_run, iso_to_fr
 from ..core.trend_chart import DARK_PALETTE, LIGHT_PALETTE, render_trend_chart
 from ..core.utils import format_fr
 
@@ -71,6 +71,7 @@ class HistoryPanel(QWidget):
     delete_requested = Signal(object)  # QCRun
     pdf_relinked = Signal(object, str)  # QCRun, new path
     load_series_requested = Signal(object)  # QCRun: load its DICOM series in the viewer
+    corrective_action_requested = Signal(object)  # QCRun: record a corrective action
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,11 +151,16 @@ class HistoryPanel(QWidget):
             "Recharger les images de ce contrôle dans la visionneuse avec les coupes UH et SPB "
             "utilisées lors du contrôle.\nUn nouvel export remplace alors le contrôle dans l'historique.")
         self._btn_load.clicked.connect(self._load_selected_series)
+        self._btn_corrective = QPushButton("Action corrective…")
+        self._btn_corrective.setToolTip(
+            "Date et nature de l'action corrective réalisée après ce contrôle "
+            "(registre des opérations)")
+        self._btn_corrective.clicked.connect(self._edit_corrective_action)
         self._btn_delete = QPushButton("Supprimer")
         self._btn_delete.clicked.connect(self._delete_selected)
         self._btn_csv = QPushButton("Exporter CSV")
         self._btn_csv.clicked.connect(self._export_csv)
-        for b in (self._btn_ref, self._btn_pdf, self._btn_load, self._btn_delete):
+        for b in (self._btn_ref, self._btn_pdf, self._btn_load, self._btn_corrective, self._btn_delete):
             b.setEnabled(False)
             btn_row.addWidget(b)
         btn_row.addStretch(1)
@@ -257,6 +263,7 @@ class HistoryPanel(QWidget):
         recorded = run is not None and not run.is_current
         self._btn_ref.setEnabled(run is not None and run.nps_freq is not None)
         self._btn_delete.setEnabled(recorded)
+        self._btn_corrective.setEnabled(recorded)
         # Loading needs the series identity; runs recorded before the folder was
         # stored can still be loaded by locating the folder by hand
         self._btn_load.setEnabled(recorded and bool(run.series_uid))
@@ -298,6 +305,11 @@ class HistoryPanel(QWidget):
         if run is not None and not run.is_current:
             self.load_series_requested.emit(run)
 
+    def _edit_corrective_action(self):
+        run = self._selected_run()
+        if run is not None and not run.is_current:
+            self.corrective_action_requested.emit(run)
+
     def _delete_selected(self):
         run = self._selected_run()
         if run is None or run.is_current:
@@ -336,6 +348,9 @@ class HistoryPanel(QWidget):
             lines.append(f"Coupe UH {run.hu_slice_index + 1}"
                          + (f" · SPB {run.nps_start_slice + 1}–{run.nps_end_slice + 1}"
                             if run.nps_start_slice is not None and run.nps_end_slice is not None else ""))
+        if run.corrective_action_date or run.corrective_action:
+            lines.append(f"Action corrective le {iso_to_fr(run.corrective_action_date) or '—'}"
+                         + (f" : {run.corrective_action}" if run.corrective_action else ""))
         if run.notes:
             lines += ["", f"<i>{run.notes}</i>"]
         if run.pdf_path:
@@ -355,7 +370,8 @@ class HistoryPanel(QWidget):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f, delimiter=";")
             w.writerow(["date", "kV", "mAs", "ct_eau_HU", "uniformite_HU", "bruit_HU", "bruit_ref_HU",
-                        "f_spb_cmm", "f_spb_ref_cmm", "artefacts", "statut", "notes", "pdf"])
+                        "f_spb_cmm", "f_spb_ref_cmm", "artefacts", "statut",
+                        "action_corrective_date", "action_corrective", "notes", "pdf"])
             for run in sorted(self._runs, key=lambda r: r.date):
                 st = evaluate_run(run)
                 w.writerow([
@@ -364,7 +380,8 @@ class HistoryPanel(QWidget):
                     "" if run.nps_freq is None else run.nps_freq,
                     "" if run.ref_nps_freq is None else run.ref_nps_freq,
                     "" if run.artifacts_present is None else int(run.artifacts_present),
-                    STATUS_SHORT[st["overall"]], run.notes, run.pdf_path,
+                    STATUS_SHORT[st["overall"]], run.corrective_action_date, run.corrective_action,
+                    run.notes, run.pdf_path,
                 ])
 
     # -- chart --------------------------------------------------------------

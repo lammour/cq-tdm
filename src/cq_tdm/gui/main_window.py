@@ -4,9 +4,10 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QRegularExpression
+from PySide6.QtCore import Qt, QTimer, QRegularExpression, QDate
 from PySide6.QtGui import QShortcut, QKeySequence, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
+    QDateEdit,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -35,7 +36,7 @@ from PySide6.QtWidgets import (
 from ..core.app_config import get_app_config, save_app_config
 from ..core.device_database import DeviceConfig, DeviceDatabase
 from ..core.utils import format_fr, parse_float_fr
-from ..core.qc_history import OK, QCRun, dicom_date_to_iso, noise_bounds, noise_status, nps_status
+from ..core.qc_history import OK, QCRun, dicom_date_to_iso, iso_to_fr, noise_bounds, noise_status, nps_status
 from ..core.dicom_locator import (
     find_series_folder, folder_matches, relative_to_database, relocation_between, resolve_dicom_folder,
 )
@@ -73,15 +74,6 @@ _theme_colors = theme_colors
 
 from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
-
-
-def _iso_to_fr(date_iso: str) -> str:
-    """ISO date to JJ/MM/AAAA; the input unchanged when it is not a date."""
-    from datetime import date
-    try:
-        return date.fromisoformat(date_iso[:10]).strftime("%d/%m/%Y")
-    except ValueError:
-        return date_iso
 
 class DeviceManagerDialog(QDialog):
     """Dialog for managing saved CT installations."""
@@ -817,6 +809,93 @@ class NotesEditorDialog(QDialog):
         return self._text_edit.toPlainText()
 
 
+class RegisterInfoDialog(QDialog):
+    """Register of operations items (ANSM 3.2.2) that only the operator knows.
+
+    Entered once per installation and printed on every report: QC phantom,
+    clinical protocol the QC protocol derives from, reconstruction algorithm
+    and level of the QC protocol.
+    """
+
+    FIELDS = (
+        ("phantom_brand", "Fantôme, marque :", "ex. Pro-Project, PTW…"),
+        ("phantom_model", "Fantôme, modèle :", "ex. fantôme d'eau 20 cm"),
+        ("phantom_serial", "Fantôme, n° de série :", ""),
+        ("clinical_protocol_origin", "Protocole clinique d'origine :",
+         "Nom du protocole clinique dont le protocole de CQ est issu"),
+        ("reconstruction_algorithm", "Algorithme de reconstruction :",
+         "Algorithme et niveau du protocole de CQ, ex. iDose niveau 3"),
+    )
+
+    def __init__(self, device: DeviceConfig, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Informations pour le registre des opérations")
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Ces informations sont exigées dans le registre des opérations (décision ANSM, "
+            "point 3.2.2). Elles sont enregistrées avec l'installation et reprises dans "
+            "chaque rapport.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self._edits: dict[str, QLineEdit] = {}
+        for attr, label, placeholder in self.FIELDS:
+            edit = QLineEdit(getattr(device, attr, "") or "")
+            edit.setPlaceholderText(placeholder)
+            form.addRow(label, edit)
+            self._edits[attr] = edit
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def apply_to(self, device: DeviceConfig):
+        for attr, edit in self._edits.items():
+            setattr(device, attr, edit.text().strip())
+
+
+class CorrectiveActionDialog(QDialog):
+    """Date and nature of the corrective action taken after a control."""
+
+    def __init__(self, run: QCRun, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Action corrective — contrôle du {run.date_fr()}")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        self._done = QCheckBox("Une action corrective a été réalisée")
+        self._done.setChecked(bool(run.corrective_action_date or run.corrective_action))
+        layout.addWidget(self._done)
+        form = QFormLayout()
+        self._date = QDateEdit()
+        self._date.setCalendarPopup(True)
+        self._date.setDisplayFormat("dd/MM/yyyy")
+        existing = QDate.fromString(run.corrective_action_date[:10], "yyyy-MM-dd")
+        self._date.setDate(existing if existing.isValid() else QDate.currentDate())
+        form.addRow("Date de l'action :", self._date)
+        self._text = QLineEdit(run.corrective_action)
+        self._text.setPlaceholderText("ex. recalibration par le fabricant, nouveau contrôle conforme")
+        form.addRow("Nature :", self._text)
+        layout.addLayout(form)
+        self._done.toggled.connect(self._date.setEnabled)
+        self._done.toggled.connect(self._text.setEnabled)
+        self._date.setEnabled(self._done.isChecked())
+        self._text.setEnabled(self._done.isChecked())
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def apply_to(self, run: QCRun):
+        if self._done.isChecked():
+            run.corrective_action_date = self._date.date().toString("yyyy-MM-dd")
+            run.corrective_action = self._text.text().strip()
+        else:
+            run.corrective_action_date = ""
+            run.corrective_action = ""
+
+
 class MainWindow(QMainWindow):
     """Main application window for CQ TDM."""
 
@@ -1099,6 +1178,13 @@ class MainWindow(QMainWindow):
         self._label_dialog_slices_note.setWordWrap(True)
         self._label_dialog_slices_note.setStyleSheet("font-size: 11px;")
         device_form_layout.addWidget(self._label_dialog_slices_note, 13, 0, 1, 2)
+        # Register of operations items that cannot be read from the images
+        self._btn_register_info = QPushButton("Informations pour le registre…")
+        self._btn_register_info.setToolTip(
+            "Fantôme de contrôle, protocole clinique d'origine, algorithme de reconstruction : "
+            "exigés dans le registre des opérations et repris dans chaque rapport")
+        self._btn_register_info.clicked.connect(self._edit_register_info)
+        device_form_layout.addWidget(self._btn_register_info, 14, 0, 1, 2)
 
         # Installation dialog (persistent: the QLineEdits above must outlive each opening
         # because the results view, PDF export and auto-detection read them directly)
@@ -1158,6 +1244,7 @@ class MainWindow(QMainWindow):
         self.history_panel.delete_requested.connect(self._delete_history_run)
         self.history_panel.pdf_relinked.connect(self._relink_history_pdf)
         self.history_panel.load_series_requested.connect(self._load_run_series)
+        self.history_panel.corrective_action_requested.connect(self._edit_corrective_action)
         self._results_tabs = QTabWidget()
         self._results_tabs.addTab(self.results_browser, "Résultats")
         self._results_tabs.addTab(self.history_panel, "Historique")
@@ -1879,6 +1966,10 @@ cliniquement significatifs avec le fenêtrage ANSM (L=0, W=80)</li>
                     logo_scale=get_app_config().report_logo_scale,
                     notes=self._user_notes,
                     history=history,
+                    dicom_folder=self._current_folder or "",
+                    **{attr: getattr(self._current_device, attr, "") or ""
+                       for attr in ("phantom_brand", "phantom_model", "phantom_serial",
+                                    "clinical_protocol_origin", "reconstruction_algorithm")},
                 )
                 history_msg = self._record_run_in_history(file_path)
                 self.statusbar.showMessage(f"Rapport exporté: {file_path}{history_msg}")
@@ -2372,7 +2463,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             text = ('<span class="nc">recalculées : format d\'image différent de la '
                     'référence (matrice ou taille de pixel)</span>')
         elif r.geometry is not None and r.geometry.is_frozen:
-            text = f"figées depuis le contrôle du {_iso_to_fr(r.geometry.frozen_date)}"
+            text = f"figées depuis le contrôle du {iso_to_fr(r.geometry.frozen_date)}"
         else:
             text = "calculées sur cette série (figées à la définition de la référence)"
         return f'<tr><th>Tailles et positions</th><td>{text}</td></tr>'
@@ -2536,6 +2627,42 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             QMessageBox.warning(self, "Historique", f"Impossible de supprimer le contrôle :\n{e}")
             return
         self._refresh_history(self._current_device)
+
+    def _edit_register_info(self):
+        """Edit the register-of-operations items of the current installation."""
+        if self._current_device is None:
+            QMessageBox.information(
+                self, "Registre des opérations",
+                "Enregistrez d'abord l'installation (bouton « Enregistrer ») : ces informations "
+                "sont stockées avec elle.")
+            return
+        dialog = RegisterInfoDialog(self._current_device, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to(self._current_device)
+        try:
+            self._device_db.save_device(self._current_device)
+        except OSError as e:
+            QMessageBox.warning(self, "Registre des opérations",
+                                f"Impossible d'enregistrer les informations :\n{e}")
+            return
+        self.statusbar.showMessage("Informations pour le registre enregistrées", 5000)
+
+    def _edit_corrective_action(self, run: QCRun):
+        """Record the corrective action taken after a recorded control."""
+        if self._current_device is None:
+            return
+        dialog = CorrectiveActionDialog(run, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to(run)
+        try:
+            self._device_db.update_run(self._current_device.device_id, run)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Historique", f"Impossible d'enregistrer l'action corrective :\n{e}")
+            return
+        self._refresh_history(self._current_device)
+        self.history_panel.select_run(run)
 
     def _relink_history_pdf(self, run: QCRun, new_path: str):
         if self._current_device is None:

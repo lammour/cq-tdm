@@ -264,3 +264,130 @@ def test_scan_date_falls_back_when_study_date_is_blank():
     assert _scan_date(ds) == "20241205"
     ds.StudyDate = "20241204"
     assert _scan_date(ds) == "20241204"
+
+
+# --- register of operations (ANSM 3.2.2) ------------------------------------
+
+def test_dicom_image_collimation_and_mode():
+    import numpy as np
+    from cq_tdm.core.dicom_loader import DicomImage
+
+    blank = np.zeros((4, 4))
+    assert DicomImage(pixel_array=blank, single_collimation_width=0.625,
+                      total_collimation_width=40.0).collimation == "64 × 0,625 mm"
+    assert DicomImage(pixel_array=blank, single_collimation_width=1.25).collimation == "1,25 mm"
+    assert DicomImage(pixel_array=blank).collimation == ""
+    assert DicomImage(pixel_array=blank, acquisition_type="SPIRAL", pitch=0.984).acquisition_mode == "hélicoïdal (pitch 0,984)"
+    assert DicomImage(pixel_array=blank, pitch=1.0).acquisition_mode == "hélicoïdal (pitch 1,000)"
+    assert DicomImage(pixel_array=blank, acquisition_type="SEQUENCED").acquisition_mode == "axial (séquentiel)"
+    assert DicomImage(pixel_array=blank).acquisition_mode == ""
+
+
+def test_iso_to_fr():
+    from cq_tdm.core.qc_history import iso_to_fr
+    assert iso_to_fr("2026-10-01") == "01/10/2026"
+    assert iso_to_fr("2026-10-01T10:00:00") == "01/10/2026"
+    assert iso_to_fr("") == ""
+    assert iso_to_fr("n/a") == "n/a"
+
+
+def test_register_fields_and_corrective_action_persist(tmp_path):
+    db_path = tmp_path / "devices.json"
+    db = DeviceDatabase(db_path)
+    device = DeviceConfig.from_dicom("ACME", "CT1", "ST1", "SN1")
+    device.phantom_brand, device.phantom_model, device.phantom_serial = "PTW", "Eau 20 cm", "123"
+    device.clinical_protocol_origin = "Abdomen routine"
+    device.reconstruction_algorithm = "iDose niveau 3"
+    db.save_device(device)
+    run = _run(series_uid="A")
+    run.corrective_action_date, run.corrective_action = "2026-10-15", "recalibration"
+    db.add_run(device.device_id, run)
+
+    reloaded = DeviceDatabase(db_path).get_device(device.device_id)
+    assert (reloaded.phantom_brand, reloaded.phantom_model, reloaded.phantom_serial) == ("PTW", "Eau 20 cm", "123")
+    assert reloaded.clinical_protocol_origin == "Abdomen routine"
+    assert reloaded.reconstruction_algorithm == "iDose niveau 3"
+    assert reloaded.runs[0].corrective_action_date == "2026-10-15"
+    assert reloaded.runs[0].corrective_action == "recalibration"
+    # A file written before these fields existed still loads
+    data = json.loads(db_path.read_text(encoding="utf-8"))
+    for key in ("phantom_brand", "clinical_protocol_origin", "reconstruction_algorithm"):
+        data["devices"][0].pop(key)
+    data["devices"][0]["runs"][0].pop("corrective_action_date")
+    db_path.write_text(json.dumps(data), encoding="utf-8")
+    older = DeviceDatabase(db_path).get_device(device.device_id)
+    assert older.phantom_brand == "" and older.runs[0].corrective_action_date == ""
+
+
+def _cells(flowables) -> list[str]:
+    """Every string found in the Tables and Paragraphs of a flowable list."""
+    out = []
+    for f in flowables:
+        if hasattr(f, "_cellvalues"):
+            for row in f._cellvalues:
+                for cell in row:
+                    out.append(cell.text if hasattr(cell, "text") else str(cell))
+        elif hasattr(f, "text"):
+            out.append(f.text)
+    return out
+
+
+def test_pdf_prints_the_register_items():
+    import numpy as np
+    from cq_tdm.core.dicom_loader import DicomImage
+    from cq_tdm.reports.pdf_report import PDFReportGenerator, _ensure_reportlab
+
+    _ensure_reportlab()
+    gen = PDFReportGenerator(
+        phantom_brand="PTW", phantom_model="Eau 20 cm", phantom_serial="123",
+        clinical_protocol_origin="Abdomen routine", reconstruction_algorithm="iDose niveau 3",
+        dicom_folder="/archives/cq/2026-10-01",
+        history=[_run(series_uid="A", run_date="2026-07-01", corrective_action_date="2026-07-10",
+                      corrective_action="recalibration")],
+    )
+    image = DicomImage(
+        pixel_array=np.zeros((512, 512)), rows=512, columns=512, pixel_spacing=(0.5, 0.5),
+        kvp=120.0, tube_current=200.0, exposure=100.0, revolution_time=0.5,
+        acquisition_type="SPIRAL", pitch=0.984, single_collimation_width=0.625,
+        total_collimation_width=40.0, focal_spots="1.2", convolution_kernel="STANDARD",
+        slice_thickness=2.5, reconstruction_diameter=240.0, ctdi_vol=12.3, ctdi_phantom="corps 32 cm",
+        series_instance_uid="1.2.826.0.1.3680043.2.1125.1.2345",
+    )
+    equipment = " | ".join(_cells(gen._build_equipment_section(image)))
+    assert "PTW Eau 20 cm (n° série 123)" in equipment
+    assert "Abdomen routine" in equipment and "iDose niveau 3" in equipment
+
+    acquisition = " | ".join(_cells(gen._build_acquisition_section(image)))
+    for expected in ("Charge (mAs) :", "100", "0,50 s", "hélicoïdal (pitch 0,984)", "64 × 0,625 mm",
+                     "1.2", "512 × 512", "12,30 mGy (fantôme corps 32 cm)",
+                     "1.2.826.0.1.3680043.2.1125.1.2345", "/archives/cq/2026-10-01"):
+        assert expected in acquisition, expected
+
+    history = " | ".join(_cells(gen._build_history_section()))
+    assert "Contrôle du 01/07/2026 : action corrective le 10/07/2026 — recalibration" in history
+
+
+def test_pdf_prints_roi_positions_and_generates(tmp_path):
+    from cq_tdm.core.dicom_loader import DicomSeries
+    from cq_tdm.core.nps import analyze_nps
+    from cq_tdm.core.water_phantom import analyze_water_phantom, calculate_rois
+    from cq_tdm.reports.pdf_report import PDFReportGenerator, generate_pdf_report
+    from .test_phantom_detection import make_phantom
+
+    series = DicomSeries(images=[make_phantom(seed=i) for i in range(3)])
+    image = series.images[1]
+    rois = calculate_rois(image, geometry=calculate_rois(image).geometry.frozen("2026-07-01"))
+    water = analyze_water_phantom(image, rois)
+    nps = analyze_nps(series, slice_range=(0, 2), geometry=rois.geometry)
+
+    gen = PDFReportGenerator()
+    text = " | ".join(_cells(gen._build_roi_positions_table(image, water, nps)))
+    assert "figées depuis le contrôle de référence du 01/07/2026" in text
+    assert "UH Centre" in text and "SPB 8 (droite)" in text
+    assert f"Ø {2 * water.central.radius}" in text
+    assert f"{nps.roi_size} × {nps.roi_size}" in text
+
+    out = tmp_path / "rapport.pdf"
+    generate_pdf_report(out, image, water, nps, None, phantom_brand="PTW",
+                        dicom_folder=str(tmp_path), history=[_run(series_uid="A")])
+    assert out.stat().st_size > 10_000

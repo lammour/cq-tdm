@@ -17,7 +17,7 @@ from cq_tdm import __version__
 
 from ..core import DicomImage, WaterPhantomResults, NPSResult, format_fr
 from ..core.qc_history import (
-    NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, dicom_date_to_iso, evaluate_run,
+    NC, NCG, OK, PENDING, STATUS_SHORT, QCRun, dicom_date_to_iso, evaluate_run, iso_to_fr,
     noise_bounds, noise_status, nps_status,
 )
 from ..core.trend_chart import LIGHT_PALETTE, render_trend_chart
@@ -394,9 +394,22 @@ class PDFReportGenerator:
         logo_scale: float = 1.0,
         notes: str = "",
         history: Optional[list[QCRun]] = None,
+        phantom_brand: str = "",
+        phantom_model: str = "",
+        phantom_serial: str = "",
+        clinical_protocol_origin: str = "",
+        reconstruction_algorithm: str = "",
+        dicom_folder: str = "",
     ):
         _ensure_reportlab()
         self.history = list(history or [])
+        # Register of operations items (ANSM 3.2.2) entered on the installation
+        self.phantom_brand = phantom_brand
+        self.phantom_model = phantom_model
+        self.phantom_serial = phantom_serial
+        self.clinical_protocol_origin = clinical_protocol_origin
+        self.reconstruction_algorithm = reconstruction_algorithm
+        self.dicom_folder = dicom_folder
         self.hospital_name = hospital_name
         self.hospital_location = hospital_location
         self.device_name = device_name
@@ -717,8 +730,17 @@ class PDFReportGenerator:
             ["Numéro de série :", val(self.serial_number)],
             ["Numéro d'inventaire :", val(self.inventory_number)],
         ]
+        # Register of operations items (ANSM 3.2.2)
+        phantom = " ".join(p for p in (self.phantom_brand, self.phantom_model) if p)
+        if self.phantom_serial:
+            phantom = f"{phantom} (n° série {self.phantom_serial})" if phantom else f"n° série {self.phantom_serial}"
+        data += [
+            ["Fantôme de CQ :", val(phantom)],
+            ["Protocole clinique d'origine :", val(self.clinical_protocol_origin)],
+            ["Algorithme de reconstruction :", val(self.reconstruction_algorithm)],
+        ]
 
-        table = Table(data, colWidths=[4.5 * cm, 10 * cm])
+        table = Table(data, colWidths=[5.6 * cm, 8.9 * cm])
         table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
@@ -743,15 +765,27 @@ class PDFReportGenerator:
         if len(date_str) == 8:
             date_str = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[:4]}"
 
+        # The register must list, for the QC protocol: mAs, kV, slice thickness,
+        # focal spot, collimation, pitch, reconstruction algorithm (decision, point 5)
+        ctdi = f"{format_fr(image.ctdi_vol, 2)} mGy" if image.ctdi_vol > 0 else "N/A"
+        if image.ctdi_vol > 0 and image.ctdi_phantom:
+            ctdi += f" (fantôme {image.ctdi_phantom})"
         data = [
             ["Date d'acquisition :", date_str or "N/A"],
             ["Protocole :", image.series_description or "N/A"],
             ["Tension (kV) :", f"{image.kvp:.0f}" if image.kvp else "N/A"],
             ["Courant (mA) :", f"{image.tube_current:.0f}" if image.tube_current else "N/A"],
-            ["Filtre :", image.convolution_kernel or "N/A"],
+            ["Charge (mAs) :", format_fr(image.mas, 0) if image.mas > 0 else "N/A"],
+            ["Temps de rotation :", f"{format_fr(image.rotation_time, 2)} s" if image.rotation_time > 0 else "N/A"],
+            ["Mode :", image.acquisition_mode or "N/A"],
+            ["Collimation :", image.collimation or "N/A"],
+            ["Foyer :", image.focal_spots or "N/A"],
+            ["Filtre / algorithme :", image.convolution_kernel or "N/A"],
             ["Épaisseur coupe :", f"{format_fr(image.slice_thickness, 1)} mm" if image.slice_thickness else "N/A"],
             ["Taille pixel :", f"{format_fr(image.pixel_size_mm, 3)} mm"],
+            ["Matrice :", f"{image.columns} × {image.rows}" if image.rows and image.columns else "N/A"],
             ["FOV :", f"{image.fov:.0f} mm" if image.fov else "N/A"],
+            ["IDSV affiché :", ctdi],
         ]
 
         table = Table(data, colWidths=[4 * cm, 10 * cm])
@@ -764,6 +798,24 @@ class PDFReportGenerator:
         ]))
 
         elements.append(table)
+        elements.append(Spacer(1, 6))
+
+        # The results refer to images archived in native DICOM format (register):
+        # identify the series and where it is kept
+        small = ParagraphStyle('ArchiveValue', parent=self.styles['InfoText'], fontSize=8, leading=10)
+        archive = [
+            ["Série DICOM (UID) :", Paragraph(image.series_instance_uid or "N/A", small)],
+            ["Dossier des images :", Paragraph(self.dicom_folder or "Non renseigné", small)],
+        ]
+        archive_table = Table(archive, colWidths=[4 * cm, 10 * cm])
+        archive_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        elements.append(archive_table)
         elements.append(Spacer(1, 8))
 
         return elements
@@ -814,8 +866,60 @@ class PDFReportGenerator:
             ]))
             elements.append(img_table)
 
+        elements.extend(self._build_roi_positions_table(image, water_results, nps_results))
         elements.append(Spacer(1, 10))
 
+        return elements
+
+    def _build_roi_positions_table(
+        self,
+        image: DicomImage,
+        water_results: Optional[WaterPhantomResults],
+        nps_results: Optional[NPSResult],
+    ) -> list:
+        """Position and size of every ROI in pixels and mm (register item for the SPB)."""
+        px = image.pixel_size_mm
+        rows = [["ROI", "Centre X (px)", "Centre Y (px)", "Taille (px)", "Taille (mm)"]]
+        if water_results:
+            for m in (water_results.central, water_results.top, water_results.right,
+                      water_results.bottom, water_results.left):
+                rows.append([f"UH {m.name}", str(m.center_col), str(m.center_row),
+                             f"Ø {2 * m.radius}", f"Ø {format_fr(2 * m.radius * px, 1)}"])
+        if nps_results and nps_results.roi_config.rois:
+            names = ["haut-gauche", "bas-droite", "bas-gauche", "haut-droite", "haut", "bas", "gauche", "droite"]
+            for i, r in enumerate(nps_results.roi_config.rois):
+                name = names[i] if i < len(names) else str(i + 1)
+                side_mm = format_fr(r.side_square * px, 1)
+                rows.append([f"SPB {i + 1} ({name})", str(r.x), str(r.y),
+                             f"{r.side_square} × {r.side_square}", f"{side_mm} × {side_mm}"])
+        if len(rows) == 1:
+            return []
+
+        geometry = water_results.geometry if water_results is not None else None
+        if geometry is None and nps_results is not None:
+            geometry = nps_results.geometry
+        if geometry is not None and geometry.is_frozen:
+            origin = (f"Tailles et positions des ROI figées depuis le contrôle de référence du "
+                      f"{iso_to_fr(geometry.frozen_date)} et réutilisées à l'identique "
+                      f"(seul le centre du fantôme est redétecté).")
+        else:
+            origin = "Tailles et positions des ROI calculées sur cette série."
+        elements = [Spacer(1, 4), Paragraph(
+            origin + " Coordonnées en pixels, origine en haut à gauche de l'image "
+            "(X vers la droite, Y vers le bas).", self.styles['InfoText']), Spacer(1, 3)]
+        table = Table(rows, colWidths=[3.6 * cm, 2.5 * cm, 2.5 * cm, 2.6 * cm, 3.0 * cm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.9, 0.9, 0.9)),
+            ('LINEBELOW', (0, 0), (-1, 0), 0.75, colors.grey),
+            ('LINEBELOW', (0, 1), (-1, -1), 0.25, colors.lightgrey),
+            ('TOPPADDING', (0, 0), (-1, -1), 1.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+        ]))
+        elements.append(table)
         return elements
 
     def _build_artifact_section(
@@ -939,6 +1043,18 @@ class PDFReportGenerator:
         table.setStyle(TableStyle(style))
         elements.append(table)
         elements.append(Spacer(1, 8))
+
+        # Corrective actions (register: date of the actions taken to restore conformity)
+        actions = [r for r in runs if r.corrective_action_date or r.corrective_action]
+        if actions:
+            elements.append(Paragraph("<b>Actions correctives</b>", self.styles['InfoText']))
+            for r in actions:
+                text = (f"Contrôle du {r.date_fr()} : action corrective le "
+                        f"{iso_to_fr(r.corrective_action_date) or '(date non renseignée)'}")
+                if r.corrective_action:
+                    text += f" — {r.corrective_action}"
+                elements.append(Paragraph(text, self.styles['InfoText']))
+            elements.append(Spacer(1, 8))
 
         # Trend charts for the two stability tests, side by side
         charts = []
@@ -1413,6 +1529,12 @@ def generate_pdf_report(
     logo_scale: float = 1.0,
     notes: str = "",
     history: Optional[list[QCRun]] = None,
+    phantom_brand: str = "",
+    phantom_model: str = "",
+    phantom_serial: str = "",
+    clinical_protocol_origin: str = "",
+    reconstruction_algorithm: str = "",
+    dicom_folder: str = "",
 ):
     """
     Convenience function to generate a PDF report.
@@ -1436,6 +1558,10 @@ def generate_pdf_report(
         logo_scale: Logo scale factor (1.0 = 100%).
         notes: User notes in simplified markdown format.
         history: Previously recorded QC runs of the device (table + trend charts).
+        phantom_brand, phantom_model, phantom_serial: QC phantom (register item).
+        clinical_protocol_origin: Clinical protocol the QC protocol derives from.
+        reconstruction_algorithm: Reconstruction algorithm and level of the QC protocol.
+        dicom_folder: Folder of the archived DICOM images the results refer to.
     """
     generator = PDFReportGenerator(
         hospital_name=hospital_name,
@@ -1450,5 +1576,11 @@ def generate_pdf_report(
         logo_scale=logo_scale,
         notes=notes,
         history=history,
+        phantom_brand=phantom_brand,
+        phantom_model=phantom_model,
+        phantom_serial=phantom_serial,
+        clinical_protocol_origin=clinical_protocol_origin,
+        reconstruction_algorithm=reconstruction_algorithm,
+        dicom_folder=dicom_folder,
     )
     generator.generate_report(output_path, image, water_results, nps_results, artifact_result, nps_image)

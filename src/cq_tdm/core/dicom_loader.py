@@ -48,6 +48,8 @@ class DicomImage:
     revolution_time: float = 0.0  # Gantry rotation time (s), DICOM (0018,9305)
     exposure: float = 0.0  # Exposure (mAs), DICOM (0018,1152)
     pitch: float = 0.0  # Spiral pitch factor, DICOM (0018,9311); 0 if axial
+    single_collimation_width: float = 0.0  # Detector row width (mm), DICOM (0018,9306)
+    total_collimation_width: float = 0.0  # Total beam collimation (mm), DICOM (0018,9307)
     ctdi_vol: float = 0.0  # CTDIvol / IDSV in mGy, DICOM (0018,9345)
     ctdi_phantom: str = ""  # CTDI phantom, DICOM (0018,9346) code meaning
     acquisition_type: str = ""  # SPIRAL, SEQUENCED…, DICOM (0018,9302)
@@ -76,6 +78,30 @@ class DicomImage:
     def pixel_size_mm(self) -> float:
         """Pixel size in mm (assumes square pixels)."""
         return self.pixel_spacing[0]
+
+    @property
+    def collimation(self) -> str:
+        """Collimation as "N × w mm" (rows × row width), "" when the tags are absent."""
+        single, total = self.single_collimation_width, self.total_collimation_width
+        if single <= 0 and total <= 0:
+            return ""
+        width = f"{single:g}".replace(".", ",")
+        if single > 0 and total > 0:
+            return f"{int(round(total / single))} × {width} mm"
+        if single > 0:
+            return f"{width} mm"
+        return f"{total:g} mm".replace(".", ",")
+
+    @property
+    def acquisition_mode(self) -> str:
+        """Acquisition mode in French: hélicoïdal (with pitch), axial, or the raw DICOM value."""
+        kind = (self.acquisition_type or "").upper()
+        if kind.startswith("SPIRAL") or (not kind and self.pitch > 0):
+            pitch = f" (pitch {self.pitch:.3f})".replace(".", ",") if self.pitch > 0 else ""
+            return f"hélicoïdal{pitch}"
+        if kind.startswith("SEQUENCE"):
+            return "axial (séquentiel)"
+        return self.acquisition_type or ""
 
     @property
     def rotation_time(self) -> float:
@@ -285,6 +311,8 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         exposure_time=float(_get_attr(ds, 'ExposureTime', 0.0)),
         revolution_time=float(_get_attr(ds, 'RevolutionTime', 0.0)),
         pitch=float(_get_attr(ds, 'SpiralPitchFactor', 0.0)),
+        single_collimation_width=float(_get_attr(ds, 'SingleCollimationWidth', 0.0)),
+        total_collimation_width=float(_get_attr(ds, 'TotalCollimationWidth', 0.0)),
         ctdi_vol=float(_get_attr(ds, 'CTDIvol', 0.0)),
         ctdi_phantom=_ctdi_phantom(ds),
         acquisition_type=str(_get_attr(ds, 'AcquisitionType', '') or ''),

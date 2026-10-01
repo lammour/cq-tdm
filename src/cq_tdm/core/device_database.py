@@ -33,6 +33,14 @@ class DeviceConfig:
     serial_number: str = ""
     inventory_number: str = ""
 
+    # Register of operations (ANSM decision, point 3.2.2): entered by hand,
+    # printed on every report so that a report is a complete register entry
+    phantom_brand: str = ""
+    phantom_model: str = ""
+    phantom_serial: str = ""
+    clinical_protocol_origin: str = ""  # clinical protocol the QC protocol derives from
+    reconstruction_algorithm: str = ""  # reconstruction algorithm and level of the QC protocol
+
     # Reference values for stability tests (ANSM)
     reference_noise: float | None = None  # Reference noise (σ) in HU
     reference_nps_freq: float | None = None  # Reference NPS mean frequency in cycles/mm
