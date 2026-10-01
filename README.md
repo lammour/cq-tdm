@@ -20,16 +20,22 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Calcul de la fréquence moyenne
   - Affichage du spectre
 - **Gestion des ROI** :
-  - Détection automatique du fantôme et placement des ROI
+  - Détection automatique du fantôme (bord interne de la paroi) et placement des ROI ; les ROI périphériques ont leur bord externe à 12,5 mm de la paroi interne
+  - Taille des ROI du SPB proportionnelle au fantôme (15 % du diamètre, 64 pixels sur les séries de référence ANSM), adaptée aux matrices 1024 et aux grands champs de vue
+  - Tailles et positions des ROI figées par installation lors du contrôle de référence et réutilisées à l'identique aux contrôles suivants
   - Export des ROI (JSON, compatible avec IQMetrix-CT)
 - **Génération de rapports PDF** avec statuts de conformité et valeurs de référence ; section « Historique des contrôles » optionnelle (« Configuration > Rapports… », désactivée par défaut)
+  - Le rapport reprend les éléments demandés dans le registre des opérations (décision ANSM, point 3.2.2) : paramètres du protocole de contrôle (kV, mAs, temps de rotation, mode et pitch, collimation, foyer, filtre, épaisseur, matrice, champ de vue, IDSV), identifiant et dossier des images DICOM archivées, position et taille de chaque ROI, fantôme utilisé, protocole clinique d'origine, algorithme de reconstruction, actions correctives
 - **Historique des résultats** :
   - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
   - Onglet « Historique » : tableau des contrôles et graphique de tendance par grandeur avec la bande de tolérance ANSM ; un clic sur un point sélectionne le contrôle
+  - L'historique de la dernière installation utilisée est affiché dès le lancement, sans charger d'image
   - Définition des valeurs de référence à partir d'un contrôle passé, export CSV, ouverture du rapport PDF associé
+  - Saisie de la date et de la nature de l'action corrective réalisée après un contrôle
   - « Charger la série DICOM » : recharge les images d'un contrôle passé dans la visionneuse avec les coupes utilisées à l'époque ; si le dossier a été déplacé, il peut être localisé ou recherché dans un dossier d'archive, la série étant vérifiée par son identifiant DICOM
 - **Base de données des appareils** :
-  - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification et des coupes de mesure
+  - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification, des informations du registre des opérations, des coupes de mesure et de la géométrie des ROI
+  - Une seule fenêtre « Gestion des installations » pour créer, modifier et supprimer les installations, utilisable sans image chargée
   - Détection automatique des appareils enregistrés
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
   - L'historique des contrôles est stocké dans le même fichier que les appareils (`devices.json`)
@@ -136,10 +142,10 @@ pip install -e .
 
 ## Utilisation
 
-1. Lancer l'application
+1. Lancer l'application : l'historique de la dernière installation utilisée est affiché
 2. Charger une série DICOM (l'installation est reconnue automatiquement si elle a déjà été enregistrée)
 3. Choisir les coupes de mesure sous le curseur de coupe ; « Réinit. coupes » revient aux coupes enregistrées
-4. Cliquer sur « Modifier… » pour renseigner l'installation et les valeurs de référence, puis « Enregistrer »
+4. Cliquer sur « Nouvelle installation » ou « Modifier… » pour ouvrir la fenêtre des installations : créer l'installation depuis l'image chargée, renseigner ses informations, les éléments du registre des opérations et les valeurs de référence, puis « Enregistrer les modifications »
 5. Vérifier les artéfacts et ajouter une observation si nécessaire
 6. Cliquer sur « Enregistrer les résultats et exporter le PDF » : le rapport est généré et le contrôle est ajouté à l'historique de l'installation
 7. Consulter l'onglet « Historique » pour suivre l'évolution des mesures d'un contrôle à l'autre
