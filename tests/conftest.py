@@ -22,6 +22,46 @@ TEST_DATA_DIR = Path(__file__).parent.parent / "test_data"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path, monkeypatch):
+    """Keep every test away from the user's settings and installations database.
+
+    The configuration folder (settings.json, default devices.json) is redirected
+    to tmp_path and the settings singleton starts from defaults.
+    """
+    from cq_tdm.core import app_config
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setattr(app_config.AppConfig, "config_dir", classmethod(lambda cls: config_dir))
+    monkeypatch.setattr(app_config, "_app_config", None)
+
+
+@pytest.fixture(autouse=True)
+def no_unanswered_dialogs(monkeypatch):
+    """A modal dialog nobody answers would hang the run: make it fail instead.
+
+    A test that expects a dialog replaces the call itself (its own monkeypatch
+    takes precedence).
+    """
+    from PySide6.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox
+
+    def refuse(name):
+        def raiser(*args, **kwargs):
+            texts = [a for a in args if isinstance(a, str)]
+            title = args[0].windowTitle() if args and hasattr(args[0], "windowTitle") else ""
+            raise AssertionError(f"dialogue non attendu pendant un test ({name}) : {title} {texts}")
+        return raiser
+
+    monkeypatch.setattr(QDialog, "exec", refuse("QDialog.exec"))
+    monkeypatch.setattr(QMessageBox, "exec", refuse("QMessageBox.exec"))
+    for static in ("warning", "information", "critical", "question"):
+        monkeypatch.setattr(QMessageBox, static, refuse(f"QMessageBox.{static}"))
+    for static in ("getSaveFileName", "getOpenFileName", "getExistingDirectory"):
+        monkeypatch.setattr(QFileDialog, static, refuse(f"QFileDialog.{static}"))
+    monkeypatch.setattr(QInputDialog, "getItem", refuse("QInputDialog.getItem"))
+
+
 @pytest.fixture(scope="session")
 def test_data_dir() -> Path:
     """Return the test data directory path; tests needing it are skipped without it.

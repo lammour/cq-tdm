@@ -25,6 +25,10 @@ class AppConfig:
     # controls is on screen without loading an image
     last_device_id: str = ""
 
+    # Names printed in the validation block of the last report, offered again
+    last_performed_by: str = ""
+    last_validated_by: str = ""
+
     # UI settings
     theme: str = "dark"  # "dark" or "light"
 

@@ -13,16 +13,26 @@ to the recorded control.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Optional
 
-# Files that are never DICOM; skipped without opening
-_SKIP_SUFFIXES = {".txt", ".pdf", ".xml", ".json", ".png", ".jpg", ".jpeg", ".csv", ".zip", ".html"}
+# Files that are never DICOM images; skipped without opening
+_SKIP_SUFFIXES = {".txt", ".pdf", ".xml", ".json", ".png", ".jpg", ".jpeg", ".csv", ".zip", ".html",
+                  ".bak", ".ini", ".db", ".log", ".tmp"}
+_SKIP_NAMES = {"dicomdir", "thumbs.db", "desktop.ini"}
 # How many files of a folder are opened before deciding it holds no DICOM series
 _MAX_PROBES_PER_FOLDER = 5
 
 # (old_prefix, new_prefix) pairs learnt when the user relocates a folder
 Relocation = tuple[str, str]
+
+
+def is_dicom_candidate(file_path: Path) -> bool:
+    """False for files that cannot be a DICOM image: hidden files, DICOMDIR, known extensions."""
+    name = file_path.name.lower()
+    if name.startswith(".") or name in _SKIP_NAMES:
+        return False
+    return file_path.suffix.lower() not in _SKIP_SUFFIXES
 
 
 def read_series_uid(file_path: Path) -> Optional[str]:
@@ -45,7 +55,7 @@ def folder_series_uid(folder: Path) -> Optional[str]:
         return None
     probes = 0
     for p in entries:
-        if p.suffix.lower() in _SKIP_SUFFIXES:
+        if not is_dicom_candidate(p):
             continue
         uid = read_series_uid(p)
         if uid:
@@ -57,18 +67,46 @@ def folder_series_uid(folder: Path) -> Optional[str]:
 
 
 def folder_matches(folder: Path, series_uid: str) -> bool:
-    """True when ``folder`` directly contains the series ``series_uid``."""
+    """True when ``folder`` directly contains the series ``series_uid``.
+
+    The first DICOM file usually settles it. A folder holding several series
+    (a whole study exported at once) is read further, header by header, until
+    the series is met.
+    """
     if not series_uid or not folder.is_dir():
         return False
-    return folder_series_uid(folder) == series_uid
+    try:
+        entries = sorted(p for p in folder.iterdir() if p.is_file() and is_dicom_candidate(p))
+    except OSError:
+        return False
+    failures = 0
+    for p in entries:
+        uid = read_series_uid(p)
+        if uid == series_uid:
+            return True
+        if uid is None:
+            failures += 1
+            if failures >= _MAX_PROBES_PER_FOLDER:
+                return False  # not a DICOM folder
+    return False
 
 
 def relative_to_database(folder: str | Path, db_path: Path) -> str:
-    """``folder`` relative to the database directory, or "" (other drive, unrelated)."""
+    """``folder`` relative to the database directory, or "" (other drive, unrelated).
+
+    Written with "/" whatever the platform, so that a database shared between
+    Windows and Linux workstations resolves on both.
+    """
     try:
-        return os.path.relpath(str(folder), str(db_path.parent))
+        return Path(os.path.relpath(str(folder), str(db_path.parent))).as_posix()
     except ValueError:
         return ""
+
+
+def _native_relative(rel: str) -> Path:
+    """A stored relative path as a native one; accepts "/" and "\\" separators."""
+    pure = PureWindowsPath(rel) if "\\" in rel else PurePosixPath(rel)
+    return Path(*pure.parts) if pure.parts else Path()
 
 
 def candidate_folders(
@@ -89,7 +127,7 @@ def candidate_folders(
 
     add(dicom_folder)
     if dicom_folder_rel:
-        add(db_path.parent / dicom_folder_rel)
+        add(db_path.parent / _native_relative(dicom_folder_rel))
     if dicom_folder:
         for old_prefix, new_prefix in reversed(relocations):  # most recent first
             add(apply_relocation(dicom_folder, old_prefix, new_prefix))

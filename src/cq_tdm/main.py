@@ -1,5 +1,6 @@
 """Main entry point for CQ TDM application."""
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -98,14 +99,20 @@ def _check_dependencies() -> int:
         "matplotlib.pyplot",
         "matplotlib.backends.backend_agg",
         "matplotlib.patches",
+        "matplotlib.dates",
         "reportlab.platypus",
         "reportlab.pdfbase.ttfonts",
         "PySide6.QtCore",
         "PySide6.QtGui",
         "PySide6.QtWidgets",
         "cq_tdm.core.dicom_loader",
+        "cq_tdm.core.dicom_locator",
         "cq_tdm.core.water_phantom",
         "cq_tdm.core.nps",
+        "cq_tdm.core.qc_history",
+        "cq_tdm.core.trend_chart",
+        "cq_tdm.gui.history_panel",
+        "cq_tdm.gui.image_viewer",
         "cq_tdm.reports.pdf_report",
     ]
     failures = []
@@ -120,7 +127,52 @@ def _check_dependencies() -> int:
             print(f"  {line}")
         return 1
     print(f"All {len(modules)} runtime modules imported successfully")
+    # Not fatal: the application's own dialogs carry French buttons anyway
+    if _french_qt_translation() is None:
+        print("Warning: Qt French translation (qtbase_fr) not found in this build")
     return 0
+
+
+def _french_qt_translation():
+    """The loaded Qt base translation for French, or None when the build has none."""
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+
+    translator = QTranslator()
+    path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    return translator if translator.load("qtbase_fr", path) else None
+
+
+def _install_french(app: QApplication) -> None:
+    """Make Qt's own texts French: standard buttons, file dialogs, calendars, context menus.
+
+    The interface is French only, whatever the language of the operating system.
+    """
+    from PySide6.QtCore import QLocale
+
+    QLocale.setDefault(QLocale(QLocale.Language.French, QLocale.Country.France))
+    translator = _french_qt_translation()
+    if translator is not None:
+        translator.setParent(app)  # keep it alive as long as the application
+        app.installTranslator(translator)
+
+
+def _setup_logging() -> None:
+    """Send the application log to cq_tdm.log, next to the settings file.
+
+    Errors that are handled on screen (an analysis that fails, a figure that
+    cannot be drawn for the report) leave a trace there for support.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    try:
+        handler = RotatingFileHandler(_crash_log_path(), maxBytes=1_000_000, backupCount=1,
+                                      encoding="utf-8", delay=True)
+    except OSError:
+        return  # read-only profile: run without a log file
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger("cq_tdm")
+    root.setLevel(logging.DEBUG if "--verbose" in sys.argv else logging.INFO)
+    root.addHandler(handler)
 
 
 def _crash_log_path() -> Path:
@@ -202,12 +254,16 @@ def main():
         sys.exit(_check_dependencies())
 
     sys.excepthook = _handle_uncaught_exception
+    _setup_logging()
 
     app = QApplication(sys.argv)
     app.setApplicationName("CQ TDM")
     from cq_tdm import __version__
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
+    _install_french(app)
+    logging.getLogger("cq_tdm").info("CQ TDM %s started (Python %s, %s)",
+                                     __version__, sys.version.split()[0], sys.platform)
 
     # Determine theme: --light flag overrides config
     from cq_tdm.core.app_config import get_app_config

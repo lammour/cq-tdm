@@ -1,5 +1,6 @@
 """Tests for finding a run's DICOM folder after it has been moved."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,27 @@ def archive(tmp_path: Path) -> Path:
     (root / "2026" / "junk").mkdir()
     (root / "2026" / "junk" / "a.bin").write_bytes(b"\x00" * 300)
     return root
+
+
+def test_series_is_found_in_a_folder_holding_several(tmp_path: Path):
+    """A whole study exported into one folder: the series is not the first file."""
+    study = tmp_path / "study"
+    _write_dicom(study, "IM0001", UID_B)
+    _write_dicom(study, "IM0002", UID_A)
+    (study / ".DS_Store").write_bytes(b"x")
+    assert folder_matches(study, UID_A) and folder_matches(study, UID_B)
+    assert not folder_matches(study, "1.2.3.4")
+
+
+def test_relative_path_is_portable_between_platforms(tmp_path: Path):
+    db_path = tmp_path / "cfg" / "devices.json"
+    folder = tmp_path / "data" / "2026" / "S1"
+    rel = relative_to_database(folder, db_path)
+    assert rel == "../data/2026/S1"  # "/" whatever the platform that wrote it
+    expected = Path(os.path.normpath(db_path.parent / ".." / "data" / "2026" / "S1"))
+    # A path written by a Windows workstation resolves the same way
+    for stored in (rel, "..\\data\\2026\\S1"):
+        assert candidate_folders("", stored, db_path, []) == [expected]
 
 
 def test_folder_uid_and_match(archive: Path):

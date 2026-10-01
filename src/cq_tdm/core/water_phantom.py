@@ -20,7 +20,7 @@ from typing import Optional
 import numpy as np
 
 from .dicom_loader import DicomImage, detect_phantom
-from .qc_history import NCG, OK, STATUS_LABEL, uniformity_status, water_ct_status
+from .qc_history import NCG, OK, uniformity_status, water_ct_status
 from .roi_geometry import ROIGeometry, PERIPHERAL_DISTANCE_MM
 
 
@@ -65,6 +65,9 @@ class WaterPhantomROIs:
     left: ROIDefinition  # 9h
     # Sizes and offsets the ROIs were built from (frozen on the device or computed)
     geometry: Optional[ROIGeometry] = None
+    # False when the phantom wall was not found: the ROIs sit on a default
+    # geometry (see dicom_loader._fallback_geometry) and must be checked by eye
+    phantom_detected: bool = True
 
     @property
     def peripheral(self) -> list[ROIDefinition]:
@@ -100,26 +103,12 @@ class WaterPhantomResults:
 
     # ROI geometry used for the measurement
     geometry: Optional[ROIGeometry] = None
+    # False when the phantom wall was not found on the analysed slice
+    phantom_detected: bool = True
 
     @property
     def peripheral(self) -> list[ROIMeasurement]:
         return [self.top, self.right, self.bottom, self.left]
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for reporting."""
-        return {
-            "water_ct_number": self.water_ct_number,
-            "uniformity": self.uniformity,
-            "central_mean": self.central.mean_hu,
-            "central_std": self.central.std_hu,
-            "top_mean": self.top.mean_hu,
-            "right_mean": self.right.mean_hu,
-            "bottom_mean": self.bottom.mean_hu,
-            "left_mean": self.left.mean_hu,
-            "water_ct_acceptable": self.water_ct_acceptable,
-            "water_ct_ncg": self.water_ct_ncg,
-            "uniformity_acceptable": self.uniformity_acceptable,
-        }
 
 
 def calculate_rois(
@@ -147,9 +136,11 @@ def calculate_rois(
     """
     # The decision places the peripheral ROIs 10-15 mm from the INNER wall:
     # detect_phantom measures the water disc, not the outer edge of the wall
+    phantom_detected = True
     if geometry is None:
         if center is None or diameter_pixels is None:
             detected = detect_phantom(image, initial_center=center)
+            phantom_detected = detected.detected
             if center is None:
                 center = detected.center
             if diameter_pixels is None:
@@ -158,7 +149,9 @@ def calculate_rois(
             diameter_pixels, image.pixel_size_mm, image.rows, image.columns,
             peripheral_distance_mm)
     elif center is None:
-        center = detect_phantom(image).center
+        detected = detect_phantom(image)
+        phantom_detected = detected.detected
+        center = detected.center
 
     center_row, center_col = center
     g = geometry
@@ -175,7 +168,7 @@ def calculate_rois(
                          radius=g.peripheral_radius, name="9h (Gauche)")
 
     return WaterPhantomROIs(central=central, top=top, right=right, bottom=bottom, left=left,
-                            geometry=geometry)
+                            geometry=geometry, phantom_detected=phantom_detected)
 
 
 def create_circular_mask(shape: tuple[int, int], center: tuple[int, int], radius: int) -> np.ndarray:
@@ -219,7 +212,8 @@ def measure_roi(image: DicomImage, roi: ROIDefinition) -> ROIMeasurement:
     values = image.pixel_array[mask]
 
     if len(values) == 0:
-        raise ValueError(f"ROI '{roi.name}' contains no pixels (center={roi.center_row},{roi.center_col}, radius={roi.radius})")
+        raise ValueError(f"la ROI « {roi.name} » ne contient aucun pixel "
+                         f"(centre {roi.center_row}, {roi.center_col} ; rayon {roi.radius} px)")
 
     return ROIMeasurement(
         name=roi.name,
@@ -279,6 +273,7 @@ def analyze_water_phantom(
 
     return WaterPhantomResults(
         geometry=rois.geometry,
+        phantom_detected=rois.phantom_detected,
         central=central,
         top=top,
         right=right,
@@ -290,34 +285,3 @@ def analyze_water_phantom(
         water_ct_ncg=water_ct_ncg,
         uniformity_acceptable=uniformity_acceptable,
     )
-
-
-def format_results_text(results: WaterPhantomResults) -> str:
-    """Format results as human-readable text."""
-    lines = [
-        "═══════════════════════════════════════",
-        "      ANALYSE FANTÔME EAU",
-        "═══════════════════════════════════════",
-        "",
-        "NOMBRE CT DE L'EAU",
-        f"  Valeur centrale: {results.water_ct_number:+.1f} HU",
-        "  Critère: ±7 HU (NCG: ±25 HU)",
-        f"  Statut: {STATUS_LABEL[water_ct_status(results.water_ct_number)]}",
-        "",
-        "UNIFORMITÉ",
-        f"  Écart max centre-périphérie: {results.uniformity:.1f} HU",
-        "  Critère: ≤7 HU",
-        f"  Statut: {'✓ CONFORME' if results.uniformity_acceptable else '✗ NON CONFORME'}",
-        "",
-        "BRUIT",
-        f"  Écart-type central: {results.central.std_hu:.2f} HU",
-        "",
-        "DÉTAIL PAR ROI",
-        f"  Centre:  {results.central.mean_hu:+6.1f} ± {results.central.std_hu:.1f} HU ({results.central.num_pixels} px)",
-        f"  12h:     {results.top.mean_hu:+6.1f} ± {results.top.std_hu:.1f} HU ({results.top.num_pixels} px)",
-        f"  3h:      {results.right.mean_hu:+6.1f} ± {results.right.std_hu:.1f} HU ({results.right.num_pixels} px)",
-        f"  6h:      {results.bottom.mean_hu:+6.1f} ± {results.bottom.std_hu:.1f} HU ({results.bottom.num_pixels} px)",
-        f"  9h:      {results.left.mean_hu:+6.1f} ± {results.left.std_hu:.1f} HU ({results.left.num_pixels} px)",
-        "═══════════════════════════════════════",
-    ]
-    return "\n".join(lines)

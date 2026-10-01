@@ -2,14 +2,21 @@
 
 import json
 import shutil
+import uuid
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QStandardPaths
-
+from .app_config import AppConfig
 from .qc_history import QCRun
 from .roi_geometry import ROIGeometry
+
+
+class DeviceNotFoundError(LookupError):
+    """The installation is no longer in the database (deleted, or another file was opened)."""
+
+    def __init__(self, device_id: str):
+        super().__init__(f"installation introuvable dans la base de données ({device_id or 'sans identifiant'})")
 
 
 @dataclass
@@ -104,7 +111,7 @@ class DeviceConfig:
             dicom_model_name=model_name or "",
             dicom_station_name=station_name or "",
             dicom_serial_number=serial_number or "",
-            device_name=f"{manufacturer} {model_name}".strip() or "[Nom de l'équipement]",
+            device_name=f"{manufacturer or ''} {model_name or ''}".strip(),
         )
 
     @staticmethod
@@ -114,7 +121,11 @@ class DeviceConfig:
         station_name: str,
         serial_number: str = "",
     ) -> str:
-        """Generate a unique ID from DICOM metadata."""
+        """Generate a unique ID from DICOM metadata; "" when the identity is empty.
+
+        Anonymised series can carry no manufacturer, model, station or serial
+        number at all: such an image identifies no scanner, see ``new_manual_id``.
+        """
         parts = [
             (manufacturer or "").strip().lower(),
             (model_name or "").strip().lower(),
@@ -122,6 +133,15 @@ class DeviceConfig:
             (serial_number or "").strip().lower(),
         ]
         return "_".join(p.replace(" ", "-") for p in parts if p)
+
+    @staticmethod
+    def new_manual_id() -> str:
+        """Id of an installation created from images without any DICOM identity.
+
+        Unique, so that two such installations never merge; a series without
+        identity is then attached to its installation by hand.
+        """
+        return f"manual-{uuid.uuid4().hex[:8]}"
 
     def display_name(self) -> str:
         """Get a display name for the device.
@@ -154,7 +174,7 @@ class DeviceConfig:
             return " - ".join(parts)
 
         # Fallback if nothing is filled
-        return "Équipement inconnu"
+        return "Installation sans nom"
 
 
 class DeviceDatabase:
@@ -167,11 +187,7 @@ class DeviceDatabase:
             db_path: Path to the JSON database file. Defaults to user config directory.
         """
         if db_path is None:
-            # Use platform-specific config directory
-            base_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation)
-            config_dir = Path(base_path) / "cq_tdm"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            db_path = config_dir / "devices.json"
+            db_path = self.default_path()
 
         self.db_path = db_path
         self._devices: dict[str, DeviceConfig] = {}
@@ -187,6 +203,15 @@ class DeviceDatabase:
         # Entries of "devices" that could not be read, written back untouched
         self._unreadable_devices: list = []
         self._load()
+
+    @staticmethod
+    def default_path() -> Path:
+        """Database used when none is configured: devices.json next to the settings.
+
+        The folder is created when possible; on a read-only profile the
+        application still opens and the first save reports the error.
+        """
+        return AppConfig.config_dir() / "devices.json"
 
     def _load(self):
         """Load devices from the database file."""
@@ -251,6 +276,12 @@ class DeviceDatabase:
         """Get a device by ID."""
         return self._devices.get(device_id)
 
+    def _require(self, device_id: str) -> DeviceConfig:
+        device = self._devices.get(device_id)
+        if device is None:
+            raise DeviceNotFoundError(device_id)
+        return device
+
     def find_device(
         self,
         manufacturer: str,
@@ -258,8 +289,10 @@ class DeviceDatabase:
         station_name: str,
         serial_number: str = "",
     ) -> Optional[DeviceConfig]:
-        """Find a device by DICOM metadata."""
+        """Find a device by DICOM metadata; None for an empty identity, which names no scanner."""
         device_id = DeviceConfig.generate_id(manufacturer, model_name, station_name, serial_number)
+        if not device_id:
+            return None
         return self._devices.get(device_id)
 
     def save_device(self, device: DeviceConfig):
@@ -270,7 +303,7 @@ class DeviceDatabase:
                 device.dicom_model_name,
                 device.dicom_station_name,
                 device.dicom_serial_number,
-            )
+            ) or DeviceConfig.new_manual_id()
         self._devices[device.device_id] = device
         self._save()
 
@@ -280,7 +313,7 @@ class DeviceDatabase:
         The replaced run hands its corrective action over to the new one.
         Returns True when an existing run was replaced.
         """
-        device = self._devices[device_id]
+        device = self._require(device_id)
         replaced = False
         for i, existing in enumerate(device.runs):
             if existing.run_id == run.run_id:
@@ -300,9 +333,9 @@ class DeviceDatabase:
 
     def update_run(self, device_id: str, run: QCRun):
         """Persist changes made to a run object that already belongs to the device."""
-        device = self._devices[device_id]
+        device = self._require(device_id)
         if not any(r is run for r in device.runs):
-            raise ValueError("run does not belong to this device")
+            raise ValueError("ce contrôle n'appartient pas à cette installation")
         self._save()
 
     def delete_run(self, device_id: str, run_id: str) -> bool:

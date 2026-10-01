@@ -1,10 +1,17 @@
 """DICOM loading and handling utilities."""
 
+from collections import Counter
 from pathlib import Path
 from dataclasses import dataclass, field
 import numpy as np
 import pydicom
 from pydicom.dataset import Dataset
+
+from .dicom_locator import is_dicom_candidate
+
+
+class NotACTSlice(ValueError):
+    """The file is a readable DICOM object but not an axial CT slice (topogram, dose report…)."""
 
 
 @dataclass
@@ -53,6 +60,7 @@ class DicomImage:
     ctdi_vol: float = 0.0  # CTDIvol / IDSV in mGy, DICOM (0018,9345)
     ctdi_phantom: str = ""  # CTDI phantom, DICOM (0018,9346) code meaning
     acquisition_type: str = ""  # SPIRAL, SEQUENCED…, DICOM (0018,9302)
+    image_type: str = ""  # ORIGINAL/PRIMARY/AXIAL…, DICOM (0008,0008), "/"-joined
     convolution_kernel: str = ""
     focal_spots: str = ""
     study_time: str = ""
@@ -134,13 +142,35 @@ class DicomImage:
         return 0.0
 
 
+@dataclass(frozen=True)
+class SeriesInfo:
+    """One series of axial CT slices found in a folder."""
+
+    series_uid: str
+    series_number: int
+    description: str
+    num_images: int
+
+    def label(self) -> str:
+        """Text shown when the user has to choose between the series of a folder."""
+        name = self.description or "sans description"
+        plural = "s" if self.num_images > 1 else ""
+        return f"Série {self.series_number} — {name} — {self.num_images} coupe{plural}"
+
+
 @dataclass
 class DicomSeries:
-    """Represents a series of DICOM images."""
+    """The slices of one CT series, loaded from a folder."""
 
     images: list[DicomImage] = field(default_factory=list)
-    # Files in the folder that could not be loaded, as "filename: reason"
+    # Files that should have been slices of the series but could not be used
+    # (unreadable, compressed, no pixel spacing…), as "filename : reason"
     load_errors: list[str] = field(default_factory=list)
+    # Readable DICOM objects that are not axial CT slices (topogram, dose
+    # report…): leaving them out is expected, as "filename : reason"
+    skipped: list[str] = field(default_factory=list)
+    # Every series of axial slices found in the folder, the loaded one included
+    available_series: list[SeriesInfo] = field(default_factory=list)
 
     @property
     def num_images(self) -> int:
@@ -150,19 +180,18 @@ class DicomSeries:
     def is_empty(self) -> bool:
         return len(self.images) == 0
 
-    def get_3d_array(self) -> np.ndarray:
-        """Stack all images into a 3D array (slices, rows, cols)."""
-        if self.is_empty:
-            return np.array([])
-        return np.stack([img.pixel_array for img in self.images], axis=0)
+    @property
+    def series_uid(self) -> str:
+        return self.images[0].series_instance_uid if self.images else ""
+
+    @property
+    def other_series(self) -> list[SeriesInfo]:
+        """The series of the folder that were not loaded."""
+        return [s for s in self.available_series if s.series_uid != self.series_uid]
 
     def sort_by_location(self):
         """Sort images by slice location, then instance number for ties."""
         self.images.sort(key=lambda x: (x.slice_location, x.instance_number))
-
-    def sort_by_instance(self):
-        """Sort images by instance number."""
-        self.images.sort(key=lambda x: x.instance_number)
 
 
 def _get_attr(ds: Dataset, attr: str, default=None):
@@ -221,6 +250,84 @@ def _apply_modality_lut(ds: Dataset, pixel_array: np.ndarray) -> np.ndarray:
     return hu_array
 
 
+CT_IMAGE_STORAGE = "1.2.840.10008.5.1.4.1.1.2"
+ENHANCED_CT_IMAGE_STORAGE = "1.2.840.10008.5.1.4.1.1.2.1"
+# Cosine of the largest angle accepted between the slice normal and the z axis
+_AXIAL_MIN_COSINE = 0.9
+# Largest relative difference accepted between row and column spacing
+_SQUARE_PIXEL_TOLERANCE = 0.001
+
+
+def _image_type(ds: Dataset) -> list[str]:
+    """Values of ImageType (0008,0008), upper case; [] when absent."""
+    value = _get_attr(ds, 'ImageType', None)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.split("\\")
+    return [str(v).strip().upper() for v in value]
+
+
+def _is_compressed(ds: Dataset) -> bool:
+    syntax = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+    return bool(syntax is not None and getattr(syntax, "is_compressed", False))
+
+
+def _check_ct_slice(ds: Dataset) -> None:
+    """Raise unless the dataset is an axial CT slice the analysis can use.
+
+    The decision asks for axial images, uncompressed or decompressed without
+    loss. A helical or a sequential acquisition both give axial slices
+    (ImageType value 3 "AXIAL"); a topogram is "LOCALIZER". AcquisitionType and
+    ScanOptions are not used: they are absent or vendor-specific on several
+    scanners, and both acquisition modes are accepted anyway.
+    """
+    modality = str(_get_attr(ds, 'Modality', '') or '').strip().upper()
+    if modality and modality != "CT":
+        raise NotACTSlice(f"modalité {modality} : ce n'est pas une image de tomodensitométrie")
+    sop_class = str(_get_attr(ds, 'SOPClassUID', '') or '')
+    if sop_class == ENHANCED_CT_IMAGE_STORAGE:
+        raise ValueError("format Enhanced CT (plusieurs coupes par fichier) non pris en charge : "
+                         "exportez la série au format CT classique")
+    if sop_class and sop_class != CT_IMAGE_STORAGE:
+        raise NotACTSlice("objet DICOM qui n'est pas une coupe TDM (rapport de dose, capture d'écran…)")
+    image_type = _image_type(ds)
+    if "LOCALIZER" in image_type:
+        raise NotACTSlice("topogramme (image de repérage)")
+    orientation = _get_attr(ds, 'ImageOrientationPatient', None)
+    if orientation is not None and len(orientation) == 6:
+        try:
+            rx, ry, rz, cx, cy, cz = (float(v) for v in orientation)
+        except (TypeError, ValueError):
+            rx = None
+        if rx is not None:
+            normal_z = rx * cy - ry * cx
+            if abs(normal_z) < _AXIAL_MIN_COSINE:
+                raise NotACTSlice("coupe non axiale (reconstruction coronale, sagittale ou oblique)")
+    if str(_get_attr(ds, 'LossyImageCompression', '') or '').strip() == "01":
+        raise ValueError("image compressée avec perte : la décision ANSM exige des images non "
+                         "compressées ou décompressées sans perte")
+
+
+def _pixel_spacing(ds: Dataset) -> tuple[float, float]:
+    """PixelSpacing (row, column) in mm; ValueError when absent, null or not square.
+
+    Every size in mm and every spatial frequency derives from it: a series
+    without it cannot be analysed, and guessing 1 mm would give plausible but
+    false results.
+    """
+    raw = _get_attr(ds, 'PixelSpacing', None)
+    try:
+        spacing = (float(raw[0]), float(raw[1]))
+    except (TypeError, ValueError, IndexError):
+        raise ValueError("taille de pixel absente (champ DICOM PixelSpacing)") from None
+    if not all(np.isfinite(v) and v > 0 for v in spacing):
+        raise ValueError(f"taille de pixel invalide (PixelSpacing = {spacing[0]:g} × {spacing[1]:g} mm)")
+    if abs(spacing[0] - spacing[1]) > _SQUARE_PIXEL_TOLERANCE * max(spacing):
+        raise ValueError(f"pixels non carrés ({spacing[0]:g} × {spacing[1]:g} mm) non pris en charge")
+    return spacing
+
+
 def load_dicom_file(file_path: str | Path) -> DicomImage:
     """
     Load a single DICOM file and extract relevant information.
@@ -234,18 +341,29 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
     Raises:
         FileNotFoundError: If file doesn't exist.
         pydicom.errors.InvalidDicomError: If file is not valid DICOM.
+        NotACTSlice: The object is not an axial CT slice (topogram, dose report…).
+        ValueError: The slice cannot be analysed (no pixel spacing, compressed…).
     """
     file_path = Path(file_path)
     if not file_path.exists():
-        raise FileNotFoundError(f"DICOM file not found: {file_path}")
+        raise FileNotFoundError(f"fichier DICOM introuvable : {file_path}")
 
     ds = pydicom.dcmread(str(file_path))
+    _check_ct_slice(ds)
+    pixel_spacing = _pixel_spacing(ds)
 
     # Get pixel array and convert to HU
-    pixel_array = ds.pixel_array
+    try:
+        pixel_array = ds.pixel_array
+    except Exception as e:
+        if _is_compressed(ds):
+            raise ValueError(
+                "image compressée que ce logiciel ne sait pas décompresser : "
+                "exportez la série sans compression") from e
+        raise
     if pixel_array.ndim != 2:
         # RGB secondary captures (dose reports, screenshots) are not CT slices
-        raise ValueError(f"Not a single-frame grayscale image (shape {pixel_array.shape})")
+        raise NotACTSlice("image en couleur ou à plusieurs plans (rapport de dose, capture d'écran)")
     hu_array = _apply_modality_lut(ds, pixel_array)
 
     # Slice position: SliceLocation is optional; fall back to the z component of
@@ -266,13 +384,6 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         convolution_kernel = '/'.join(str(k) for k in kernel_raw)
     else:
         convolution_kernel = str(kernel_raw)
-
-    # Extract pixel spacing
-    pixel_spacing = _get_attr(ds, 'PixelSpacing', [1.0, 1.0])
-    if hasattr(pixel_spacing, '__iter__'):
-        pixel_spacing = (float(pixel_spacing[0]), float(pixel_spacing[1]))
-    else:
-        pixel_spacing = (1.0, 1.0)
 
     # Extract patient name
     patient_name = _get_attr(ds, 'PatientName', '')
@@ -316,6 +427,7 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
         ctdi_vol=float(_get_attr(ds, 'CTDIvol', 0.0)),
         ctdi_phantom=_ctdi_phantom(ds),
         acquisition_type=str(_get_attr(ds, 'AcquisitionType', '') or ''),
+        image_type="/".join(_image_type(ds)),
         exposure=float(_get_attr(ds, 'Exposure', 0.0)),
         convolution_kernel=convolution_kernel,
         focal_spots=focal_spots,
@@ -329,48 +441,84 @@ def load_dicom_file(file_path: str | Path) -> DicomImage:
     )
 
 
-def load_dicom_folder(folder_path: str | Path) -> DicomSeries:
+def _majority(values):
+    """Most frequent value of a non-empty sequence."""
+    return Counter(values).most_common(1)[0][0]
+
+
+def load_dicom_folder(folder_path: str | Path, series_uid: str | None = None) -> DicomSeries:
     """
-    Load all DICOM files from a folder.
+    Load one series of axial CT slices from a folder.
+
+    A folder exported from a PACS often holds more than the series to analyse:
+    a topogram, a dose report, sometimes several reconstructions. Objects that
+    are not axial CT slices are left out (``skipped``); the slices are grouped
+    by SeriesInstanceUID and a single series is returned, never a mix. Within
+    it, slices whose matrix or pixel size differs from the rest are refused.
 
     Args:
         folder_path: Path to folder containing DICOM files.
+        series_uid: SeriesInstanceUID of the series to load. By default the
+            series with the most slices; ``available_series`` lists them all so
+            the caller can offer the choice.
 
     Returns:
-        DicomSeries containing all loaded images, sorted by slice location.
+        DicomSeries with the slices of one series, sorted by slice location.
 
     Raises:
         FileNotFoundError: If folder doesn't exist.
+        NotADirectoryError: If the path is not a folder.
     """
     folder_path = Path(folder_path)
     if not folder_path.exists():
-        raise FileNotFoundError(f"Folder not found: {folder_path}")
+        raise FileNotFoundError(f"dossier introuvable : {folder_path}")
+    if not folder_path.is_dir():
+        raise NotADirectoryError(f"ce n'est pas un dossier : {folder_path}")
 
     series = DicomSeries()
+    groups: dict[str, list[DicomImage]] = {}
 
-    # Find all potential DICOM files
-    # DICOM files may have .dcm extension or no extension
-    for file_path in folder_path.iterdir():
-        if not file_path.is_file():
+    # DICOM files may have a .dcm extension or none
+    for file_path in sorted(folder_path.iterdir()):
+        if not file_path.is_file() or not is_dicom_candidate(file_path):
             continue
-
-        # Skip non-DICOM files by extension
-        suffix = file_path.suffix.lower()
-        if suffix in ['.txt', '.pdf', '.xml', '.json', '.png', '.jpg', '.jpeg']:
-            continue
-
         try:
             image = load_dicom_file(file_path)
-            series.images.append(image)
-        except Exception as e:
-            # Skip files that can't be loaded as DICOM, but keep the reason so the
-            # GUI can explain an empty result (e.g. compressed transfer syntax)
-            series.load_errors.append(f"{file_path.name}: {e}")
+        except NotACTSlice as e:
+            series.skipped.append(f"{file_path.name} : {e}")
             continue
+        except Exception as e:
+            # Keep the reason so the GUI can say why slices are missing
+            # (compressed transfer syntax, no pixel spacing…)
+            series.load_errors.append(f"{file_path.name} : {e}")
+            continue
+        groups.setdefault(image.series_instance_uid, []).append(image)
 
-    # Sort by slice location
+    series.available_series = sorted(
+        (SeriesInfo(uid, images[0].series_number, images[0].series_description, len(images))
+         for uid, images in groups.items()),
+        key=lambda info: (-info.num_images, info.series_number))
+    if not groups:
+        return series
+
+    if series_uid is not None and series_uid in groups:
+        chosen = series_uid
+    else:
+        chosen = series.available_series[0].series_uid
+    images = groups[chosen]
+
+    # One matrix and one pixel size per series: the ROIs are placed in pixels
+    # and the SPB uses a single pixel size for all its slices
+    fmt = _majority([(img.rows, img.columns, round(img.pixel_size_mm, 4)) for img in images])
+    for img in images:
+        if (img.rows, img.columns, round(img.pixel_size_mm, 4)) == fmt:
+            series.images.append(img)
+        else:
+            series.load_errors.append(
+                f"{Path(img.file_path).name} : matrice ou taille de pixel différente "
+                "du reste de la série")
+
     series.sort_by_location()
-
     return series
 
 
@@ -400,6 +548,11 @@ class PhantomGeometry:
     center_col: float
     radius: float
     num_edge_points: int = 0  # rays kept by the circle fit (0 = fallback geometry)
+
+    @property
+    def detected(self) -> bool:
+        """False for the fallback geometry: no wall was found, the ROIs are placed blind."""
+        return self.num_edge_points > 0
 
     @property
     def center(self) -> tuple[int, int]:
