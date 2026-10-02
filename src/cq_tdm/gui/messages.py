@@ -47,3 +47,26 @@ def french_button_box(accept: str = "Enregistrer", reject: str = "Annuler") -> Q
     box.addButton(accept, QDialogButtonBox.ButtonRole.AcceptRole).setDefault(True)
     box.addButton(reject, QDialogButtonBox.ButtonRole.RejectRole)
     return box
+
+
+def ask_save(parent, title: str, text: str) -> str:
+    """Ask what to do with unsaved changes: "save", "discard" or "cancel".
+
+    Escape and closing the box mean "cancel": nothing is lost by accident.
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(title)
+    box.setText(text)
+    save = box.addButton("Enregistrer", QMessageBox.ButtonRole.AcceptRole)
+    discard = box.addButton("Ne pas enregistrer", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton("Annuler", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(save)
+    box.setEscapeButton(cancel)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is save:
+        return "save"
+    if clicked is discard:
+        return "discard"
+    return "cancel"
