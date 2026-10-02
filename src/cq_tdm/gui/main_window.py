@@ -1598,21 +1598,31 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_PageUp), self, self._prev_10_slices)
         QShortcut(QKeySequence(Qt.Key.Key_PageDown), self, self._next_10_slices)
 
-        # Go to HU slice position
-        QShortcut(QKeySequence("H"), self, self._go_to_hu_slice)
+    # Characters that zoom in and out. Several each, so that neither Shift nor
+    # a given keyboard layout is needed: "=" and "+" share a key on QWERTY and
+    # AZERTY; "-" and "_" share one on QWERTY, "-" and "6" on AZERTY.
+    ZOOM_IN_CHARACTERS = "+="
+    ZOOM_OUT_CHARACTERS = "-_6"
 
-        # Go to center of NPS range
-        QShortcut(QKeySequence("N"), self, self._go_to_nps_center)
-
-        # View controls
-        QShortcut(QKeySequence("F"), self, self._fit_image_to_view)
-        QShortcut(QKeySequence("R"), self, self._reset_view)
-        QShortcut(QKeySequence("U"), self, self._toggle_water_rois)
-        QShortcut(QKeySequence("S"), self, self._toggle_nps_rois)
-        QShortcut(QKeySequence("I"), self, self._toggle_info_overlays)
-
-        # Analysis
-        QShortcut(QKeySequence("A"), self, self._inspect_artifacts)
+    def keyPressEvent(self, event):
+        """Zoom keys. They are matched on the character typed, not on the key:
+        the same code then works on every layout and on the numeric keypad. A
+        field that has the focus takes its characters first, so "-6" typed in a
+        number box never reaches this.
+        """
+        commands = (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+                    | Qt.KeyboardModifier.MetaModifier)
+        character = event.text()
+        if character and not (event.modifiers() & commands) and self._current_image is not None:
+            if character in self.ZOOM_IN_CHARACTERS:
+                self.image_viewer.viewer.zoom_step(+1)
+                event.accept()
+                return
+            if character in self.ZOOM_OUT_CHARACTERS:
+                self.image_viewer.viewer.zoom_step(-1)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _prev_slice(self):
         """Go to previous slice."""
@@ -1650,39 +1660,6 @@ class MainWindow(QMainWindow):
             current = self.image_viewer.slice_slider.value()
             self.image_viewer.slice_slider.setValue(min(self._current_series.num_images - 1, current + 10))
 
-    def _go_to_hu_slice(self):
-        """Go to the HU analysis slice."""
-        if self._current_series:
-            hu_slice = self.image_viewer.get_hu_slice_index()
-            self.image_viewer.slice_slider.setValue(hu_slice)
-
-    def _go_to_nps_center(self):
-        """Go to the center of the NPS range."""
-        if self._current_series:
-            start, end = self.image_viewer.get_nps_slice_range()
-            center = (start + end) // 2
-            self.image_viewer.slice_slider.setValue(center)
-
-    def _fit_image_to_view(self):
-        """Fit the image to the viewer (reset zoom)."""
-        self.image_viewer._reset_zoom()
-
-    def _reset_view(self):
-        """Reset the entire view (slice, zoom, W/L, analysis slices)."""
-        self.image_viewer._reset_all()
-
-    def _toggle_water_rois(self):
-        """Toggle water phantom ROI visibility."""
-        self.image_viewer._toggle_water_rois()
-
-    def _toggle_nps_rois(self):
-        """Toggle NPS ROI visibility."""
-        self.image_viewer._toggle_nps_rois()
-
-    def _toggle_info_overlays(self):
-        """Toggle the image information and folder path shown over the image."""
-        self.image_viewer._toggle_info_overlays()
-
     def _show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
         shortcuts = """
@@ -1691,22 +1668,12 @@ class MainWindow(QMainWindow):
 <tr><td width="120"><b>←</b> / <b>→</b></td><td>Coupe précédente / suivante</td></tr>
 <tr><td><b>Page préc.</b> / <b>Page suiv.</b></td><td>Sauter 10 coupes</td></tr>
 <tr><td><b>Début</b> / <b>Fin</b></td><td>Première / dernière coupe</td></tr>
-<tr><td><b>H</b></td><td>Aller à la coupe UH</td></tr>
-<tr><td><b>N</b></td><td>Aller au centre de la plage SPB</td></tr>
 </table>
 
-<h3>Affichage</h3>
+<h3>Zoom</h3>
 <table>
-<tr><td width="120"><b>F</b></td><td>Ajuster l'image à la vue</td></tr>
-<tr><td><b>R</b></td><td>Réinitialiser l'affichage et remettre les coupes d'analyse au centre de la série</td></tr>
-<tr><td><b>U</b></td><td>Afficher/masquer les ROI UH (jaune et cyan)</td></tr>
-<tr><td><b>S</b></td><td>Afficher/masquer les ROI SPB (vert)</td></tr>
-<tr><td><b>I</b></td><td>Afficher/masquer les informations sur l'image</td></tr>
-</table>
-
-<h3>Analyse</h3>
-<table>
-<tr><td width="120"><b>A</b></td><td>Inspection des artéfacts</td></tr>
+<tr><td width="120"><b>+</b> ou <b>=</b></td><td>Zoom avant</td></tr>
+<tr><td><b>-</b>, <b>_</b> ou <b>6</b></td><td>Zoom arrière</td></tr>
 </table>
 
 <h3>Fichiers et fenêtres</h3>
@@ -1750,7 +1717,7 @@ décision ANSM du 18/12/2025 (section 9.1.7).</p>
     <li><i>Coupes SPB</i> : plage de 10 coupes centrées pour le bruit et le spectre de puissance du bruit</li>
     </ul>
 </li>
-<li><b>Inspecter les artéfacts</b> (touche A) : vérifiez visuellement l'absence d'artéfacts
+<li><b>Inspecter les artéfacts</b> (bouton « Inspection visuelle des artéfacts ») : vérifiez visuellement l'absence d'artéfacts
 cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
 <li><b>Enregistrer le contrôle et exporter le PDF</b> (Ctrl+E) : enregistre le contrôle dans l'historique de l'installation et génère le rapport conforme</li>
 </ol>

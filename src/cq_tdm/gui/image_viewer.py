@@ -426,6 +426,7 @@ class ImageViewer(QGraphicsView):
     zoom_changed = Signal(int)  # zoom percentage
 
     # Zoom limits
+    ZOOM_STEP = 1.15  # one wheel notch or one key press
     MIN_ZOOM = 0.1  # 10%
     MAX_ZOOM = 50.0  # 5000%
 
@@ -843,21 +844,30 @@ class ImageViewer(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent):
         """Handle mouse wheel for zooming."""
-        factor = 1.15
-        if event.angleDelta().y() > 0:
-            new_zoom = self._current_zoom * factor
-            if new_zoom <= self.MAX_ZOOM:
-                self._auto_fit = False  # Disable auto-fit when user manually zooms
-                self.scale(factor, factor)
-                self._current_zoom = new_zoom
-                self.zoom_changed.emit(round(self._current_zoom * 100))
-        else:
-            new_zoom = self._current_zoom / factor
-            if new_zoom >= self.MIN_ZOOM:
-                self._auto_fit = False  # Disable auto-fit when user manually zooms
-                self.scale(1 / factor, 1 / factor)
-                self._current_zoom = new_zoom
-                self.zoom_changed.emit(round(self._current_zoom * 100))
+        self._zoom_by(self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP)
+
+    def _zoom_by(self, factor: float):
+        """Multiply the zoom by `factor`, within the allowed range."""
+        new_zoom = self._current_zoom * factor
+        if not self.MIN_ZOOM <= new_zoom <= self.MAX_ZOOM:
+            return
+        self._auto_fit = False  # Disable auto-fit when user manually zooms
+        self.scale(factor, factor)
+        self._current_zoom = new_zoom
+        self.zoom_changed.emit(round(self._current_zoom * 100))
+
+    def zoom_step(self, direction: int):
+        """One zoom step in (+1) or out (-1) from the keyboard, around the centre of the view.
+
+        The wheel zooms around the pointer; a key press has no pointer to
+        refer to, and the pointer may well be outside the image.
+        """
+        anchor = self.transformationAnchor()
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        try:
+            self._zoom_by(self.ZOOM_STEP if direction > 0 else 1 / self.ZOOM_STEP)
+        finally:
+            self.setTransformationAnchor(anchor)
 
     def get_zoom_percent(self) -> int:
         """Get current zoom level as percentage."""
@@ -1118,14 +1128,14 @@ class ImageViewerWidget(QWidget):
 
         self.toggle_water_rois = self._add_overlay_toggle(
             overlay_layout, "UH", "#ffcc00",
-            "Afficher/masquer les ROI UH (U)", self._on_water_toggle)
+            "Afficher/masquer les ROI UH", self._on_water_toggle)
         self.toggle_nps_rois = self._add_overlay_toggle(
             overlay_layout, "SPB", "#00cc00",
-            "Afficher/masquer les ROI SPB (S)", self._on_nps_toggle)
+            "Afficher/masquer les ROI SPB", self._on_nps_toggle)
         # Controls the top-left image information and the folder path together
         self.toggle_info = self._add_overlay_toggle(
             overlay_layout, "Infos", "#cccccc",
-            "Afficher/masquer les informations de l'image et le chemin du dossier (I)",
+            "Afficher/masquer les informations de l'image et le chemin du dossier",
             self._on_info_toggle)
 
         # Set fixed size, initially hidden until image loaded
@@ -1241,10 +1251,6 @@ class ImageViewerWidget(QWidget):
         self._info_visible = checked
         self._update_info_overlay()
         self._update_folder_overlay()
-
-    def _toggle_info_overlays(self):
-        """Toggle the information overlays (keyboard shortcut)."""
-        self.toggle_info.toggle()
 
     def _update_info_overlay(self):
         """Refresh and position the top-left information overlay."""
@@ -1427,31 +1433,6 @@ class ImageViewerWidget(QWidget):
         self.window_spin.setValue(window)
         self.level_spin.setValue(level)
 
-    def _reset_all(self):
-        """Reset all view parameters (slice, zoom, window/level, analysis slices)."""
-        # Get total slice count
-        total_slices = self.slice_slider.maximum() + 1
-
-        if self.slice_slider.isEnabled() and total_slices > 1:
-            # Reset to middle slice (default HU position)
-            middle_slice = (total_slices - 1) // 2
-            self.slice_slider.setValue(middle_slice)
-
-            # Reset HU slice to middle (1-based)
-            self.hu_slice_spin.setValue(middle_slice + 1)
-
-            # Reset NPS range to 10 central slices (1-based)
-            nps_start = max(1, (total_slices - 10) // 2 + 1)
-            nps_end = min(total_slices, nps_start + 9)
-            self.nps_start_spin.setValue(nps_start)
-            self.nps_end_spin.setValue(nps_end)
-
-        # Reset window/level to Soft tissues (default)
-        self._set_preset(400, 40)
-
-        # Reset zoom/pan
-        self.viewer.reset_view()
-
     def _on_water_toggle(self, checked: bool):
         """Handle water ROI toggle switch change."""
         self.viewer.set_water_rois_visible(checked)
@@ -1459,14 +1440,6 @@ class ImageViewerWidget(QWidget):
     def _on_nps_toggle(self, checked: bool):
         """Handle NPS ROI toggle switch change."""
         self.viewer.set_nps_rois_visible(checked)
-
-    def _toggle_water_rois(self):
-        """Toggle water phantom ROI visibility (keyboard shortcut)."""
-        self.toggle_water_rois.toggle()
-
-    def _toggle_nps_rois(self):
-        """Toggle NPS ROI visibility (keyboard shortcut)."""
-        self.toggle_nps_rois.toggle()
 
     def _reset_window_level(self):
         """Reset window/level to default (Soft tissues)."""
