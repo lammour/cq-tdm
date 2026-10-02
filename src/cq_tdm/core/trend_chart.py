@@ -44,19 +44,33 @@ def render_trend_chart(
     height_px: int = 260,
     dpi: int = 100,
     title: str | None = None,
+    ylabel: str | None = None,
 ) -> TrendChart:
+    """``ylabel`` replaces the metric's label on the Y axis ("" for no label)."""
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
 
-    pal = palette
-    label = dict(METRICS)[metric]
     fig, ax = plt.subplots(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
+    try:
+        return _draw_trend_chart(fig, ax, runs, metric, ref_noise, ref_nps, current, selected,
+                                 palette, dpi, title, ylabel)
+    finally:
+        # Closed even when drawing fails, or every failed refresh leaks a figure
+        plt.close(fig)
+
+
+def _draw_trend_chart(fig, ax, runs, metric, ref_noise, ref_nps, current, selected,
+                      palette, dpi, title, ylabel) -> TrendChart:
+    import matplotlib.dates as mdates
+
+    pal = palette
+    label = dict(METRICS)[metric] if ylabel is None else ylabel
     fig.patch.set_facecolor(pal["bg"])
     ax.set_facecolor(pal["bg"])
 
-    ordered = sorted(runs, key=lambda r: r.date)
+    # A control without a known date has no place on a time axis
+    ordered = sorted((r for r in runs if r.date is not None), key=lambda r: r.date)
     plotted: list[tuple[date, float, QCRun, str]] = [
         (r.date, getattr(r, metric), r, evaluate_run(r)[metric])
         for r in ordered if getattr(r, metric) is not None
@@ -83,10 +97,13 @@ def render_trend_chart(
     if current is not None and getattr(current, metric) is not None:
         st = evaluate_run(current)[metric]
         y = getattr(current, metric)
-        ax.plot(current.date, y, marker="*", markersize=13, linestyle="none",
+        # The measurement in progress is drawn today when its images carry no
+        # date yet; the date itself is asked before anything is recorded
+        current_date = current.date or date.today()
+        ax.plot(current_date, y, marker="*", markersize=13, linestyle="none",
                 color=pal.get(st, pal[PENDING]), markeredgecolor=pal["current"],
                 markeredgewidth=1.2, zorder=4, label="Mesure en cours")
-        plotted.append((current.date, y, current, st))
+        plotted.append((current_date, y, current, st))
 
     for x, y, run, _st in plotted:
         if run is selected:
@@ -115,7 +132,8 @@ def render_trend_chart(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(True, alpha=0.25, color=pal["grid"])
-    ax.set_ylabel(label, color=pal["muted"], fontsize=8)
+    if label:
+        ax.set_ylabel(label, color=pal["muted"], fontsize=8)
     if title:
         ax.set_title(title, color=pal["fg"], fontsize=9)
     if ax.get_legend_handles_labels()[0]:
@@ -131,5 +149,4 @@ def render_trend_chart(
 
     buf = BytesIO()
     fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
-    plt.close(fig)
     return TrendChart(png=buf.getvalue(), hits=hits)

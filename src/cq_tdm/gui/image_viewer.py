@@ -487,7 +487,7 @@ class ImageViewer(QGraphicsView):
 
         # Placeholder text
         self._placeholder = self._scene.addText(
-            "Aucune image chargée\n\nGlissez-déposez des fichiers DICOM\nou utilisez Fichier → Ouvrir"
+            "Aucune image chargée\n\nGlissez-déposez un dossier DICOM\nou utilisez Fichier → Ouvrir un dossier DICOM"
         )
         self._placeholder.setDefaultTextColor(QColor(136, 136, 136))
 
@@ -730,16 +730,11 @@ class ImageViewer(QGraphicsView):
             self._debug_items.append(perimeter)
 
             # Add label
-            label = self._scene.addText("Phantom")
+            label = self._scene.addText("Fantôme")
             label.setDefaultTextColor(QColor(255, 0, 255))
             label.setPos(center_col + self._debug_radius + 5, center_row - 10)
             label.setZValue(15)
             self._debug_items.append(label)
-
-    # Legacy compatibility
-    def set_rois(self, rois: list[ROI]):
-        """Set ROIs (legacy - uses water phantom category)."""
-        self.set_water_rois(rois)
 
     def clear_rois(self):
         """Clear all ROIs."""
@@ -946,7 +941,7 @@ class ImageViewerWidget(QWidget):
         slice_layout = QHBoxLayout(slice_bar)
         slice_layout.setContentsMargins(5, 38, 5, 5)  # Extra top margin for UH label
 
-        slice_layout.addWidget(QLabel("Coupe:"))
+        slice_layout.addWidget(QLabel("Coupe :"))
         self.slice_slider = MarkedSlider(Qt.Orientation.Horizontal)
         self.slice_slider.setRange(0, 0)
         self.slice_slider.setEnabled(False)
@@ -981,7 +976,7 @@ class ImageViewerWidget(QWidget):
 
         welcome_layout.addSpacing(20)
 
-        btn_open_folder = QPushButton("Ouvrir un dossier DICOM...")
+        btn_open_folder = QPushButton("Ouvrir un dossier DICOM…")
         # Same accent fill as the other primary actions, from the theme palette
         btn_open_folder.setStyleSheet(
             primary_button_style(padding="12px 24px", font_size="14px", radius="6px"))
@@ -1015,15 +1010,15 @@ class ImageViewerWidget(QWidget):
         wl_layout.setContentsMargins(5, 5, 5, 2)
 
         # Reset W/L button
-        btn_reset_wl = QPushButton("⟲ Réinit. W/L")
-        btn_reset_wl.setToolTip("Réinitialiser fenêtrage (Tissus mous)")
+        btn_reset_wl = QPushButton("⟲ Réinit. fenêtrage")
+        btn_reset_wl.setToolTip("Revenir au fenêtrage tissus mous (largeur 400 UH, centre 40 UH)")
         btn_reset_wl.clicked.connect(self._reset_window_level)
         wl_layout.addWidget(btn_reset_wl)
 
         wl_layout.addSpacing(10)
 
         # Window control (default: Soft tissues W:400)
-        wl_layout.addWidget(QLabel("W:"))
+        wl_layout.addWidget(QLabel("Largeur :"))
         self.window_spin = QSpinBox()
         self.window_spin.setRange(1, 4000)
         self.window_spin.setValue(400)
@@ -1038,7 +1033,7 @@ class ImageViewerWidget(QWidget):
         wl_layout.addWidget(self.window_slider)
 
         # Level control (default: Soft tissues L:40)
-        wl_layout.addWidget(QLabel("L:"))
+        wl_layout.addWidget(QLabel("Centre :"))
         self.level_spin = QSpinBox()
         self.level_spin.setRange(-1000, 3000)
         self.level_spin.setValue(40)
@@ -1060,7 +1055,7 @@ class ImageViewerWidget(QWidget):
         zoom_layout.setContentsMargins(5, 2, 5, 5)
 
         # Reset Zoom button
-        btn_reset_zoom = QPushButton("⟲ Réinit. Zoom")
+        btn_reset_zoom = QPushButton("⟲ Ajuster le zoom")
         btn_reset_zoom.setToolTip("Ajuster l'image à la vue")
         btn_reset_zoom.clicked.connect(self._reset_zoom)
         zoom_layout.addWidget(btn_reset_zoom)
@@ -1068,7 +1063,7 @@ class ImageViewerWidget(QWidget):
         zoom_layout.addSpacing(10)
 
         # Zoom control
-        zoom_layout.addWidget(QLabel("Zoom:"))
+        zoom_layout.addWidget(QLabel("Zoom :"))
         self.zoom_spin = QSpinBox()
         self.zoom_spin.setRange(10, 5000)
         self.zoom_spin.setValue(100)
@@ -1117,7 +1112,7 @@ class ImageViewerWidget(QWidget):
         overlay_layout.setSpacing(6)
 
         # Title label
-        title_label = QLabel("Afficher/Cacher :")
+        title_label = QLabel("Afficher/masquer :")
         title_label.setStyleSheet("color: #ccc; background: transparent;")
         overlay_layout.addWidget(title_label)
 
@@ -1318,11 +1313,11 @@ class ImageViewerWidget(QWidget):
         slice_controls_layout.setContentsMargins(0, 0, 0, 0)
 
         # HU analysis slice
-        slice_controls_layout.addWidget(QLabel("Coupe UH:"))
+        slice_controls_layout.addWidget(QLabel("Coupe UH :"))
         self.hu_slice_spin = QSpinBox()
         self.hu_slice_spin.setRange(1, 1)
         self.hu_slice_spin.setValue(1)
-        self.hu_slice_spin.setToolTip("Coupe pour l'analyse UH (nombre CT, uniformité, bruit)")
+        self.hu_slice_spin.setToolTip("Coupe de l'analyse UH (nombre CT de l'eau, uniformité)")
         self.hu_slice_spin.setMinimumWidth(60)
         slice_controls_layout.addWidget(self.hu_slice_spin)
 
@@ -1335,11 +1330,11 @@ class ImageViewerWidget(QWidget):
         slice_controls_layout.addSpacing(15)
 
         # NPS analysis range
-        slice_controls_layout.addWidget(QLabel("Coupes SPB:"))
+        slice_controls_layout.addWidget(QLabel("Coupes SPB :"))
         self.nps_start_spin = QSpinBox()
         self.nps_start_spin.setRange(1, 1)
         self.nps_start_spin.setValue(1)
-        self.nps_start_spin.setToolTip("Première coupe pour l'analyse SPB")
+        self.nps_start_spin.setToolTip("Première coupe de l'analyse du bruit et du SPB")
         self.nps_start_spin.setMinimumWidth(60)
         slice_controls_layout.addWidget(self.nps_start_spin)
 
@@ -1348,7 +1343,7 @@ class ImageViewerWidget(QWidget):
         self.nps_end_spin = QSpinBox()
         self.nps_end_spin.setRange(1, 1)
         self.nps_end_spin.setValue(1)
-        self.nps_end_spin.setToolTip("Dernière coupe pour l'analyse SPB")
+        self.nps_end_spin.setToolTip("Dernière coupe de l'analyse du bruit et du SPB")
         self.nps_end_spin.setMinimumWidth(60)
         slice_controls_layout.addWidget(self.nps_end_spin)
 
@@ -1696,7 +1691,7 @@ class ArtifactInspectionDialog(QDialog):
             slice_layout = QHBoxLayout(slice_container)
             slice_layout.setContentsMargins(5, 5, 5, 5)
 
-            slice_layout.addWidget(QLabel("Coupe:"))
+            slice_layout.addWidget(QLabel("Coupe :"))
 
             self._slice_slider = QSlider(Qt.Orientation.Horizontal)
             self._slice_slider.setRange(0, len(self._images) - 1)
@@ -1720,7 +1715,7 @@ class ArtifactInspectionDialog(QDialog):
         layout.addWidget(self._viewer, 1)
 
         # Window settings info (below image)
-        info_label = QLabel("Fenêtre artéfacts ANSM : Centre (L) = 0 UH, Largeur (W) = 80 UH")
+        info_label = QLabel("Fenêtre ANSM pour les artéfacts : centre 0 UH, largeur 80 UH")
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_label.setStyleSheet(f"color: {'#666' if is_light else '#aaa'};")
         layout.addWidget(info_label)
@@ -1793,7 +1788,7 @@ class ArtifactInspectionDialog(QDialog):
         from PySide6.QtWidgets import QTextEdit
         self._description_edit = QTextEdit()
         self._description_edit.setPlaceholderText(
-            "Décrivez les artéfacts observés (type, localisation, sévérité...)"
+            "Décrivez les artéfacts observés (type, localisation, sévérité…)"
         )
         self._description_edit.setMaximumHeight(80)
         if is_light:

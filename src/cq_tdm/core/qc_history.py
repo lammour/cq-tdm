@@ -31,6 +31,19 @@ STATUS_LABEL = {OK: "Conforme", NC: "Non conforme", NCG: "NC grave", PENDING: "�
 STATUS_SHORT = {OK: "Conforme", NC: "NC", NCG: "NCG", PENDING: "—", INCOMPLETE: "Incomplet",
                 NC_OR_NCG: "NC ou NCG"}
 
+# Types of control the decision provides for (periodicity, point 2.1; before
+# commissioning and after an intervention, point 3.2.1); free text is accepted
+DEFAULT_CONTROL_TYPE = "trimestriel"
+CONTROL_TYPES = (
+    DEFAULT_CONTROL_TYPE,
+    "semestriel (per-opératoire)",
+    "avant mise en service",
+    "après intervention ou évolution logicielle",
+)
+
+# Shown in place of the date of a control whose date is unknown
+UNKNOWN_DATE = "date inconnue"
+
 NC_OR_NCG_NOTICE = "NC ou NCG : merci de vous référer au texte ANSM"
 NC_OR_NCG_DETAIL = (
     "Nombre CT de l'eau égal à 25 UH en valeur absolue : la décision ANSM (point 9.1.7.3) "
@@ -40,9 +53,9 @@ NC_OR_NCG_DETAIL = (
 
 # Metrics that can be trended, with their display label
 METRICS = [
-    ("water_ct", "Nombre CT de l'eau (HU)"),
-    ("uniformity", "Uniformité (HU)"),
-    ("noise", "Bruit σ (HU)"),
+    ("water_ct", "Nombre CT de l'eau (UH)"),
+    ("uniformity", "Uniformité (UH)"),
+    ("noise", "Bruit σ (UH)"),
     ("nps_freq", "Fréquence moyenne SPB (cycles/mm)"),
 ]
 
@@ -53,11 +66,15 @@ class QCRun:
 
     ``run_date`` is an ISO date (YYYY-MM-DD) taken from the DICOM study date so
     that the history reflects when the phantom was scanned, not when the report
-    was written. Reference values are frozen at recording time so that an old
-    control keeps the verdict it had when it was signed.
+    was written. When the images carry no date the user enters it at export
+    (``run_date_manual``); it is never replaced by the day of the analysis.
+    Reference values are frozen at recording time so that an old control keeps
+    the verdict it had when it was signed.
     """
 
     run_date: str
+    # True when the date was typed by the user because the images have none
+    run_date_manual: bool = False
     run_id: str = ""
     series_uid: str = ""
 
@@ -93,6 +110,11 @@ class QCRun:
     # actions taken to restore conformity); date is ISO
     corrective_action_date: str = ""
     corrective_action: str = ""
+    # Type of control (CONTROL_TYPES or free text) and the names printed in the
+    # validation block of the report; "" on runs recorded before 0.8.1
+    control_type: str = ""
+    performed_by: str = ""
+    validated_by: str = ""
 
     pdf_path: str = ""
     # Folder the series was analysed from, so the report can be rebuilt from the
@@ -111,15 +133,16 @@ class QCRun:
             self.run_id = self.series_uid or f"{self.run_date}-{uuid.uuid4().hex[:8]}"
 
     @property
-    def date(self) -> date:
-        """The run date as a ``date``; falls back to today if the string is malformed."""
+    def date(self) -> date | None:
+        """The run date as a ``date``; None when it is unknown or malformed."""
         try:
             return date.fromisoformat(self.run_date)
-        except ValueError:
-            return date.today()
+        except (ValueError, TypeError):
+            return None
 
     def date_fr(self) -> str:
-        return self.date.strftime("%d/%m/%Y")
+        d = self.date
+        return d.strftime("%d/%m/%Y") if d is not None else UNKNOWN_DATE
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -144,11 +167,15 @@ def iso_to_fr(date_iso: str) -> str:
 
 
 def dicom_date_to_iso(dicom_date: str) -> str:
-    """Convert a DICOM DA value (YYYYMMDD) to ISO; today's date if unusable."""
+    """Convert a DICOM DA value (YYYYMMDD) to ISO; "" when it is absent or unusable.
+
+    A control without a date must be reported as such, not stamped with the
+    day of the analysis.
+    """
     try:
         return datetime.strptime(dicom_date.strip()[:8], "%Y%m%d").date().isoformat()
     except (ValueError, AttributeError):
-        return date.today().isoformat()
+        return ""
 
 
 # ---------------------------------------------------------------------------

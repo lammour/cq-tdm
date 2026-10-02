@@ -33,7 +33,7 @@ jobs:
       - name: Download ANSM test data
         run: |
           # Download test data from the 'test-data' release
-          curl -L -o test_data.zip \
+          curl --fail -L -o test_data.zip \
             "https://github.com/${{ github.repository }}/releases/download/test-data/ansm-test-data.zip"
           unzip -q test_data.zip -d .
           ls -la test_data/

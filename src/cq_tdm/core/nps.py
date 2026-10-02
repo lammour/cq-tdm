@@ -14,6 +14,7 @@ import numpy as np
 
 from .dicom_loader import DicomImage, DicomSeries, detect_phantom, detect_phantom_center
 from .roi_geometry import ROIGeometry
+from .utils import format_fr
 
 # numpy 2.0 renamed trapz -> trapezoid; scipy.integrate.trapezoid gives identical
 # results but pulls in scipy.linalg/sparse/optimize, which are excluded from the
@@ -136,8 +137,6 @@ class NPSResult:
 
     # Summary metrics
     mean_frequency: float  # Mean frequency (centroid) of the raw radial NPS (cycles/mm)
-    average_nps: float  # Average NPS value
-    total_noise_power: float  # Integral of NPS
 
     # Analysis parameters
     num_slices: int
@@ -160,21 +159,11 @@ class NPSResult:
     # bruit sur l'ensemble des 10 coupes"): the standard deviation of the HU
     # values is taken in every NPS ROI of every slice, and these are averaged
     # (8 ROIs on 10 slices: mean of 80 standard deviations). Same value as
-    # "Noise (HU)" of the iQMetrix-CT reference results.
+    # "Noise (UH)" of the iQMetrix-CT reference results.
     noise: float = 0.0
     noise_roi_count: int = 0  # number of standard deviations averaged
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for reporting."""
-        return {
-            "mean_frequency": self.mean_frequency,
-            "noise": self.noise,
-            "average_nps": self.average_nps,
-            "total_noise_power": self.total_noise_power,
-            "num_slices": self.num_slices,
-            "roi_size": self.roi_size,
-            "pixel_size_mm": self.pixel_size_mm,
-        }
+    # False when the phantom wall was not found on the middle slice of the range
+    phantom_detected: bool = True
 
 
 def extract_roi_for_nps(
@@ -199,11 +188,11 @@ def extract_roi_for_nps(
     center_row, center_col = center
     half_size = roi_size // 2
 
-    # Extract ROI
+    # Extract ROI (roi_size pixels per side, odd sizes included)
     row_start = center_row - half_size
-    row_end = center_row + half_size
+    row_end = row_start + roi_size
     col_start = center_col - half_size
-    col_end = center_col + half_size
+    col_end = col_start + roi_size
 
     # Ensure within bounds
     row_start = max(0, row_start)
@@ -281,6 +270,8 @@ def compute_nps_2d(
     Returns:
         Tuple of (nps_2d, freq_x, freq_y).
     """
+    if not pixel_size_mm > 0:
+        raise ValueError(f"taille de pixel invalide ({pixel_size_mm} mm)")
     rows, cols = roi.shape
 
     # No windowing - direct FFT of detrended ROI
@@ -333,7 +324,7 @@ def radial_average(
     """
     rows, cols = nps_2d.shape
     if rows != cols:
-        raise ValueError(f"NPS array must be square, got {rows}x{cols}")
+        raise ValueError(f"le SPB 2D doit être carré (reçu {rows} × {cols})")
     fft_size = rows
 
     # iQMetrix extends to 1.375 × Nyquist (into the corners of the 2D spectrum):
@@ -541,12 +532,12 @@ def analyze_nps(
         slices = series.images[start_idx:end_idx + 1]
         actual_num_slices = len(slices)
         if actual_num_slices < 1:
-            raise ValueError("Slice range results in no slices.")
+            raise ValueError("la plage de coupes du SPB ne contient aucune coupe")
     else:
         if series.num_images < num_slices:
             raise ValueError(
-                f"NPS analysis requires at least {num_slices} slices, "
-                f"but series only has {series.num_images}."
+                f"l'analyse du SPB demande au moins {num_slices} coupes, "
+                f"la série n'en contient que {series.num_images}"
             )
         # Use central slices
         start_idx = (series.num_images - num_slices) // 2
@@ -607,7 +598,7 @@ def analyze_nps(
             total_roi_count += 1
 
     if nps_sum is None or total_roi_count == 0:
-        raise ValueError("No valid ROIs could be processed.")
+        raise ValueError("aucune ROI du SPB n'est entièrement dans l'image")
 
     # Check ROI uniformity - detect outliers
     roi_warnings: list[ROIUniformityWarning] = []
@@ -626,13 +617,15 @@ def analyze_nps(
                 z_score = abs(roi_mean - overall_mean) / overall_std_of_means
                 if z_score > 3 and abs(roi_mean - overall_mean) > 2.0:
                     warnings_for_roi.append(
-                        f"moyenne atypique ({roi_mean:.1f} HU vs {overall_mean:.1f} HU attendu)"
+                        f"moyenne atypique ({format_fr(roi_mean, 1)} UH pour "
+                        f"{format_fr(overall_mean, 1)} UH attendu)"
                     )
 
             # Check if std is unusually high (>2x median std)
             if median_std > 0 and roi_std > 2 * median_std:
                 warnings_for_roi.append(
-                    f"écart-type élevé ({roi_std:.1f} HU vs {median_std:.1f} HU médian)"
+                    f"écart-type élevé ({format_fr(roi_std, 1)} UH pour "
+                    f"{format_fr(median_std, 1)} UH en médiane)"
                 )
 
             if warnings_for_roi:
@@ -641,7 +634,7 @@ def analyze_nps(
                     slice_index=slice_idx,
                     mean_hu=roi_mean,
                     std_hu=roi_std,
-                    message=f"ROI {roi_idx + 1}, coupe {slice_idx + 1}: {'; '.join(warnings_for_roi)}"
+                    message=f"ROI {roi_idx + 1}, coupe {slice_idx + 1} : {' ; '.join(warnings_for_roi)}"
                 ))
 
     # Noise: mean of the standard deviations of the ROIs (before detrending)
@@ -656,11 +649,6 @@ def analyze_nps(
 
     # Smoothed curve, for display and comparison with the reference fit only
     nps_radial_fit = fit_nps_polynomial(freq_radial, nps_radial, degree=11)
-
-    # Compute summary metrics
-    average_nps = np.mean(nps_radial)
-    df = freq_radial[1] - freq_radial[0] if len(freq_radial) > 1 else 1.0
-    total_noise_power = np.sum(nps_radial) * df
 
     # Build ROI configuration for export
     # Inner (water) diameter; the ANSM files give the nominal outer diameter
@@ -688,8 +676,6 @@ def analyze_nps(
         nps_radial_fit=nps_radial_fit,
         frequencies_radial=freq_radial,
         mean_frequency=mean_frequency,
-        average_nps=average_nps,
-        total_noise_power=total_noise_power,
         num_slices=actual_num_slices,
         roi_size=roi_size,
         pixel_size_mm=pixel_size,
@@ -699,26 +685,5 @@ def analyze_nps(
         geometry=geometry,
         noise=noise,
         noise_roi_count=len(roi_stats),
+        phantom_detected=phantom.detected,
     )
-
-
-def format_nps_results_text(result: NPSResult) -> str:
-    """Format NPS results as human-readable text."""
-    lines = [
-        "═══════════════════════════════════════",
-        "   SPECTRE DE PUISSANCE DU BRUIT (SPB)",
-        "═══════════════════════════════════════",
-        "",
-        f"Nombre de coupes analysées: {result.num_slices}",
-        f"Taille ROI: {result.roi_size} × {result.roi_size} pixels",
-        f"Taille pixel: {result.pixel_size_mm:.3f} mm",
-        "",
-        "RÉSULTATS",
-        f"  Bruit: {result.noise:.2f} HU (moyenne de {result.noise_roi_count} écarts-types)",
-        f"  Fréquence moyenne: {result.mean_frequency:.3f} cycles/mm",
-        f"  NPS moyen: {result.average_nps:.2f} HU²·mm²",
-        f"  Puissance totale: {result.total_noise_power:.2f} HU²",
-        "",
-        "═══════════════════════════════════════",
-    ]
-    return "\n".join(lines)

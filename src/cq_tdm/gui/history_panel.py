@@ -6,6 +6,7 @@ main window applies and persists.
 """
 
 import csv
+import html
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
@@ -45,6 +46,7 @@ from ..core.qc_history import (
 )
 from ..core.trend_chart import DARK_PALETTE, LIGHT_PALETTE, render_trend_chart
 from ..core.utils import format_fr
+from .messages import ask
 
 _COLUMNS = ["Date", "kV", "mAs", "CT eau", "Unif.", "Bruit σ", "f SPB", "Artéfacts", "Statut"]
 _HIT_RADIUS_PX = 10
@@ -192,7 +194,7 @@ class HistoryPanel(QWidget):
         list is empty when no installation is selected.
         """
         self._placeholder = placeholder
-        self._runs = sorted(runs, key=lambda r: (r.date, r.recorded_at), reverse=True)
+        self._runs = sorted(runs, key=lambda r: (r.run_date, r.recorded_at), reverse=True)
         self._ref_noise, self._ref_nps = ref_noise, ref_nps
         self._refresh()
 
@@ -273,9 +275,10 @@ class HistoryPanel(QWidget):
         else:
             statuses = [evaluate_run(r)["overall"] for r in self._runs]
             nc = sum(statuses.count(s) for s in (NC, NCG, NC_OR_NCG))
-            first = self._runs[-1].date.strftime("%m/%Y")
+            dated = [r.date for r in self._runs if r.date is not None]
+            since = f" depuis {dated[-1].strftime('%m/%Y')}" if dated else ""
             self._summary.setText(
-                f"{n} contrôle{'s' if n > 1 else ''} depuis {first} · {nc} non conforme{'s' if nc > 1 else ''} · "
+                f"{n} contrôle{'s' if n > 1 else ''}{since} · {nc} non conforme{'s' if nc > 1 else ''} · "
                 f"dernier : {self._runs[0].date_fr()}"
             )
         self._on_selection_changed()
@@ -296,15 +299,11 @@ class HistoryPanel(QWidget):
         # Loading needs the series identity; runs recorded before the folder was
         # stored can still be loaded by locating the folder by hand
         self._btn_load.setEnabled(recorded and bool(run.series_uid))
-        if recorded and run.pdf_path:
-            exists = Path(run.pdf_path).is_file()
-            self._btn_pdf.setEnabled(True)
-            self._btn_pdf.setText("Ouvrir le PDF" if exists else "Localiser le PDF…")
-            self._btn_pdf.setToolTip(run.pdf_path if exists else f"Fichier introuvable :\n{run.pdf_path}")
-        else:
-            self._btn_pdf.setEnabled(False)
-            self._btn_pdf.setText("Ouvrir le PDF")
-            self._btn_pdf.setToolTip("")
+        # The file is only looked for when the button is clicked: probing a
+        # report stored on an unreachable network share at every selection
+        # change would freeze the window
+        self._btn_pdf.setEnabled(bool(recorded and run.pdf_path))
+        self._btn_pdf.setToolTip(run.pdf_path if recorded and run.pdf_path else "")
         self._schedule_redraw()
 
     # -- actions ------------------------------------------------------------
@@ -320,11 +319,17 @@ class HistoryPanel(QWidget):
             return
         path = Path(run.pdf_path)
         if path.is_file():
+            # The path comes from a shared, editable file: only ever open a PDF
+            if path.suffix.lower() != ".pdf":
+                QMessageBox.warning(self, "Rapport PDF",
+                                    f"Ce fichier n'est pas un rapport PDF :\n{path}")
+                return
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
             return
         new_path, _ = QFileDialog.getOpenFileName(
-            self, "Localiser le rapport PDF", str(path.parent if path.parent.exists() else Path.home()),
-            "PDF (*.pdf)")
+            self, "Rapport introuvable : localiser le PDF",
+            str(path.parent if path.parent.exists() else Path.home()),
+            "Rapports PDF (*.pdf)")
         if new_path:
             self.pdf_relinked.emit(run, new_path)
             self._on_selection_changed()
@@ -343,12 +348,10 @@ class HistoryPanel(QWidget):
         run = self._selected_run()
         if run is None or run.is_current:
             return
-        answer = QMessageBox.question(
-            self, "Supprimer le contrôle",
-            f"Supprimer le contrôle du {run.date_fr()} de l'historique ?\n"
-            "Le rapport PDF n'est pas supprimé.",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
+        if ask(self, "Supprimer le contrôle",
+               f"Supprimer le contrôle du {run.date_fr()} de l'historique ?\n"
+               "Le rapport PDF et les images DICOM ne sont pas supprimés.",
+               "Supprimer", "Annuler", destructive=True):
             self.delete_requested.emit(run)
 
     def _show_details(self):
@@ -359,36 +362,40 @@ class HistoryPanel(QWidget):
         ref_n = "—" if run.ref_noise is None else format_fr(run.ref_noise, 2)
         ref_f = "—" if run.ref_nps_freq is None else format_fr(run.ref_nps_freq, 3)
         nps = "—" if run.nps_freq is None else format_fr(run.nps_freq, 3)
+        # Free text typed by the user (or read from DICOM) goes into rich text:
+        # escaped, or "<2 UH" would swallow the rest of the line
+        esc = html.escape
+        date_note = " (date saisie manuellement)" if run.run_date_manual else ""
         lines = [
             "<b>Mesure en cours (non enregistrée)</b>" if run.is_current
-            else f"<b>Contrôle du {run.date_fr()}</b>",
+            else f"<b>Contrôle du {run.date_fr()}</b>{date_note}",
             f"{format_fr(run.kvp, 0)} kV · {format_fr(run.mas, 0)} mAs"
             + (f" · {format_fr(run.slice_thickness, 1)} mm" if run.slice_thickness else "")
-            + (f" · {run.kernel}" if run.kernel else ""),
+            + (f" · {esc(run.kernel)}" if run.kernel else ""),
             "",
-            f"Nombre CT de l'eau : {format_fr(run.water_ct, 1, sign=True)} HU — {STATUS_SHORT[st['water_ct']]}",
-            f"Uniformité : {format_fr(run.uniformity, 1)} HU — {STATUS_SHORT[st['uniformity']]}",
-            f"Bruit σ : {'—' if run.noise is None else format_fr(run.noise, 2)} HU (réf. {ref_n}) "
+            f"Nombre CT de l'eau : {format_fr(run.water_ct, 1, sign=True)} UH — {STATUS_SHORT[st['water_ct']]}",
+            f"Uniformité : {format_fr(run.uniformity, 1)} UH — {STATUS_SHORT[st['uniformity']]}",
+            f"Bruit σ : {'—' if run.noise is None else format_fr(run.noise, 2)} UH (réf. {ref_n}) "
             f"— {STATUS_SHORT[st['noise']]}",
             f"Fréq. SPB : {nps} c/mm (réf. {ref_f}) — {STATUS_SHORT[st['nps_freq']]}",
             f"Artéfacts : {STATUS_SHORT[st['artifacts']]}"
-            + (f" — {run.artifacts_description}" if run.artifacts_description else ""),
+            + (f" — {esc(run.artifacts_description)}" if run.artifacts_description else ""),
         ]
         if run.hu_slice_index is not None:
             lines.append(f"Coupe UH {run.hu_slice_index + 1}"
                          + (f" · SPB {run.nps_start_slice + 1}–{run.nps_end_slice + 1}"
                             if run.nps_start_slice is not None and run.nps_end_slice is not None else ""))
         if run.corrective_action_date or run.corrective_action:
-            lines.append(f"Action corrective le {iso_to_fr(run.corrective_action_date) or '—'}"
-                         + (f" : {run.corrective_action}" if run.corrective_action else ""))
+            lines.append(f"Action corrective le {esc(iso_to_fr(run.corrective_action_date)) or '—'}"
+                         + (f" : {esc(run.corrective_action)}" if run.corrective_action else ""))
         if run.notes:
-            lines += ["", f"<i>{run.notes}</i>"]
+            lines += ["", "<i>" + esc(run.notes).replace("\n", "<br>") + "</i>"]
         if run.pdf_path:
-            lines += ["", f"Rapport : {run.pdf_path}"]
+            lines += ["", f"Rapport : {esc(run.pdf_path)}"]
         if run.dicom_folder:
-            lines.append(f"Images : {run.dicom_folder}")
+            lines.append(f"Images : {esc(run.dicom_folder)}")
         if run.software_version:
-            lines.append(f"CQ TDM {run.software_version}")
+            lines.append(f"CQ TDM {esc(run.software_version)}")
         QMessageBox.information(self, "Détail du contrôle", "<br>".join(lines))
 
     def _export_csv(self):
@@ -397,23 +404,28 @@ class HistoryPanel(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Exporter l'historique", "historique_cq.csv", "CSV (*.csv)")
         if not path:
             return
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["date", "kV", "mAs", "ct_eau_HU", "uniformite_HU", "bruit_HU", "bruit_ref_HU",
-                        "f_spb_cmm", "f_spb_ref_cmm", "artefacts", "statut",
-                        "action_corrective_date", "action_corrective", "notes", "pdf"])
-            for run in sorted(self._runs, key=lambda r: r.date):
-                st = evaluate_run(run)
-                w.writerow([
-                    run.run_date, run.kvp, run.mas, run.water_ct, run.uniformity,
-                    "" if run.noise is None else run.noise,
-                    "" if run.ref_noise is None else run.ref_noise,
-                    "" if run.nps_freq is None else run.nps_freq,
-                    "" if run.ref_nps_freq is None else run.ref_nps_freq,
-                    "" if run.artifacts_present is None else int(run.artifacts_present),
-                    STATUS_SHORT[st["overall"]], run.corrective_action_date, run.corrective_action,
-                    run.notes, run.pdf_path,
-                ])
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow(["date", "kV", "mAs", "ct_eau_UH", "uniformite_UH", "bruit_UH", "bruit_ref_UH",
+                            "f_spb_cmm", "f_spb_ref_cmm", "artefacts", "statut",
+                            "action_corrective_date", "action_corrective", "notes", "pdf"])
+                for run in sorted(self._runs, key=lambda r: (r.run_date, r.recorded_at)):
+                    st = evaluate_run(run)
+                    w.writerow([
+                        run.run_date, run.kvp, run.mas, run.water_ct, run.uniformity,
+                        "" if run.noise is None else run.noise,
+                        "" if run.ref_noise is None else run.ref_noise,
+                        "" if run.nps_freq is None else run.nps_freq,
+                        "" if run.ref_nps_freq is None else run.ref_nps_freq,
+                        "" if run.artifacts_present is None else int(run.artifacts_present),
+                        STATUS_SHORT[st["overall"]], run.corrective_action_date, run.corrective_action,
+                        run.notes, run.pdf_path,
+                    ])
+        except OSError as e:
+            # Typically the previous export still open in a spreadsheet
+            QMessageBox.warning(self, "Exporter l'historique",
+                                f"Impossible d'écrire le fichier :\n{e}")
 
     # -- chart --------------------------------------------------------------
 

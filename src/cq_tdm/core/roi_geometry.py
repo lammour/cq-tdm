@@ -72,6 +72,8 @@ class ROIGeometry:
         peripheral_distance_mm: float = PERIPHERAL_DISTANCE_MM,
     ) -> "ROIGeometry":
         """Apply the sizing rules to a detected inner diameter."""
+        if not pixel_size_mm > 0:
+            raise ValueError(f"taille de pixel invalide ({pixel_size_mm} mm)")
         radius_px = diameter_px / 2.0
 
         central_radius = int(diameter_px * CENTRAL_FRACTION / 2)

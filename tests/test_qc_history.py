@@ -141,9 +141,9 @@ def test_pdf_noise_is_the_mean_sigma_of_the_spb_rois():
     assert status == "CONFORME"
 
     section = " | ".join(_cells(gen._build_noise_section(results, nps)))
-    assert "8,00 HU" in section
+    assert "8,00 UH" in section
     assert "moyenne des écarts-types de 80 ROI du SPB (10 coupes)" in section
-    assert "9,00 HU (coupe UH, pour information)" in section
+    assert "9,00 UH (coupe UH, pour information)" in section
     assert "CONFORME" in section
 
     missing = " | ".join(_cells(gen._build_noise_section(results, None)))
@@ -183,8 +183,23 @@ def test_run_id_defaults_to_series_uid_or_is_unique():
 
 def test_dicom_date_to_iso():
     assert dicom_date_to_iso("20260315") == "2026-03-15"
-    assert len(dicom_date_to_iso("")) == 10  # today, still ISO
-    assert len(dicom_date_to_iso("garbage")) == 10
+    # No date in the images: reported as unknown, never replaced by today
+    assert dicom_date_to_iso("") == ""
+    assert dicom_date_to_iso("garbage") == ""
+
+
+def test_run_without_a_usable_date_is_not_dated_today():
+    for stored in ("", "2026-13-01", "garbage"):
+        run = _run(run_date=stored)
+        assert run.date is None
+        assert run.date_fr() == "date inconnue"
+    assert _run(run_date="2026-03-15").date_fr() == "15/03/2026"
+
+
+def test_manual_date_flag_is_stored():
+    run = QCRun.from_dict(_run(run_date_manual=True).to_dict())
+    assert run.run_date_manual is True
+    assert QCRun.from_dict({"run_date": "2026-03-15"}).run_date_manual is False
 
 
 def test_round_trip_dict_ignores_unknown_keys_and_transient_flag():
@@ -253,7 +268,7 @@ def test_unreadable_entries_do_not_hide_the_rest_and_survive_a_save(tmp_path):
     saved = json.loads(db_path.read_text(encoding="utf-8"))
     assert bad_run in saved["devices"][0]["runs"]
     assert bad_device in saved["devices"]
-    assert not db_path.with_suffix(".json.bak").exists()
+    assert not list(tmp_path.glob("devices.json.*.bak"))
 
 
 def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
@@ -261,7 +276,15 @@ def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
     db_path.write_text("{ not json", encoding="utf-8")
     db = DeviceDatabase(db_path)
     assert db.load_error and db.get_all_devices() == [] and db.load_warnings == []
-    assert db_path.with_suffix(".json.bak").read_text(encoding="utf-8") == "{ not json"
+    # The copy is dated, so a later failure cannot overwrite it
+    (backup,) = tmp_path.glob("devices.json.*.bak")
+    assert backup.read_text(encoding="utf-8") == "{ not json"
+
+    # A file that is merely probed (the user pointing at it) is left alone
+    other = tmp_path / "other.json"
+    other.write_text("{ not json", encoding="utf-8")
+    assert DeviceDatabase(other, backup_unreadable=False).load_error
+    assert not list(tmp_path.glob("other.json.*"))
 
 
 def test_reexporting_a_series_keeps_its_corrective_action(tmp_path):
@@ -463,9 +486,9 @@ def test_pdf_never_says_conforme_when_a_test_was_not_judged():
     results.water_ct_number = 0.0
 
     summary = " | ".join(_cells(PDFReportGenerator()._build_summary_section(results, nps, None)))
-    assert "(référence absente)" in summary and "NON ÉVALUÉ" in summary
-    assert "TEST NON RÉALISÉ" in summary
-    assert "CONFORME" in summary  # CT number and uniformity are still judged
+    assert "Non évalué — référence absente" in summary
+    assert "Non réalisé" in summary
+    assert "✔ Conforme" in summary  # CT number and uniformity are still judged
 
 
 def test_scan_date_falls_back_when_study_date_is_blank():
@@ -538,7 +561,11 @@ def test_register_fields_and_corrective_action_persist(tmp_path):
 
 
 def _cells(flowables) -> list[str]:
-    """Every string found in the Tables and Paragraphs of a flowable list."""
+    """Every string found in the Tables and Paragraphs of a flowable list.
+
+    The report sets non-breaking spaces (French typography): they are returned
+    as plain spaces.
+    """
     out = []
     for f in flowables:
         if hasattr(f, "_cellvalues"):
@@ -547,7 +574,7 @@ def _cells(flowables) -> list[str]:
                     out.append(cell.text if hasattr(cell, "text") else str(cell))
         elif hasattr(f, "text"):
             out.append(f.text)
-    return out
+    return [text.replace("\N{NO-BREAK SPACE}", " ") for text in out]
 
 
 def test_pdf_prints_the_register_items():
@@ -601,7 +628,7 @@ def test_pdf_prints_roi_positions_and_generates(tmp_path):
     gen = PDFReportGenerator()
     text = " | ".join(_cells(gen._build_roi_positions_table(image, water, nps)))
     assert "figées depuis le contrôle de référence du 01/07/2026" in text
-    assert "UH Centre" in text and "SPB 8 (droite)" in text
+    assert "UH C (centre)" in text and "SPB 8 (droite)" in text
     assert f"Ø {2 * water.central.radius}" in text
     assert f"{nps.roi_size} × {nps.roi_size}" in text
 

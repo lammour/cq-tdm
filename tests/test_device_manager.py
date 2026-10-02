@@ -91,10 +91,9 @@ def test_slices_are_recorded_only_for_the_loaded_scanner(qapp, db):
 
 
 def test_references_from_the_analysis_on_screen(qapp, db, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
     from cq_tdm.core.roi_geometry import ROIGeometry
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr("cq_tdm.gui.main_window.ask", lambda *a, **k: True)
     geometry = ROIGeometry.from_phantom(400, 0.5, 512, 512).frozen("2026-10-01")
     other = DeviceConfig.from_dicom("OTHER", "X", "ST9", "SN9")
     db.save_device(other)
@@ -120,11 +119,10 @@ def test_references_from_the_analysis_on_screen(qapp, db, monkeypatch):
 
 
 def test_roi_geometry_is_shown_and_can_be_reset(qapp, db, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
     from cq_tdm.core.qc_history import QCRun
     from cq_tdm.core.roi_geometry import ROIGeometry
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr("cq_tdm.gui.main_window.ask", lambda *a, **k: True)
     device = DeviceConfig.from_dicom("ACME", "CT 9000", "ST1", "SN42")
     device.roi_geometry = ROIGeometry.from_phantom(400, 0.5, 512, 512).frozen("2026-10-01")
     device.runs.append(QCRun(run_date="2026-10-01", series_uid="A"))

@@ -23,8 +23,24 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e ".[dev]"
           pip install pyinstaller
+
+      - name: Check that the version matches the release tag
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          version=$(python -c "import cq_tdm; print(cq_tdm.__version__)")
+          if [ "v$version" != "${{ github.event.release.tag_name }}" ]; then
+            echo "::error::__version__ is $version but the release tag is ${{ github.event.release.tag_name }}"
+            exit 1
+          fi
+
+      # The executables are built from code whose tests pass on this platform
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
 
       - name: Build portable executable
         run: pyinstaller cq_tdm.spec
@@ -48,8 +64,12 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      # The version is given to Inno Setup instead of being parsed by it from
+      # a fixed line of __init__.py
       - name: Build Inno Setup installer
-        run: iscc installers/cq-tdm.iss
+        run: |
+          $version = python -c "import cq_tdm; print(cq_tdm.__version__)"
+          iscc "/DMyAppVersion=$version" installers/cq-tdm.iss
 
       - name: Upload portable executable
         uses: actions/upload-artifact@v7

@@ -38,7 +38,6 @@ _LAZY_IMPORTS = {
     "calculate_rois": ".water_phantom",
     "measure_roi": ".water_phantom",
     "analyze_water_phantom": ".water_phantom",
-    "format_results_text": ".water_phantom",
     # nps
     "NPSROIPosition": ".nps",
     "NPSROIConfig": ".nps",
@@ -46,7 +45,6 @@ _LAZY_IMPORTS = {
     "ROIUniformityWarning": ".nps",
     "calculate_nps_roi_positions": ".nps",
     "analyze_nps": ".nps",
-    "format_nps_results_text": ".nps",
 }
 
 

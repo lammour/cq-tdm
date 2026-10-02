@@ -2,7 +2,9 @@
 
 import json
 from pathlib import Path
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
+
+from .utils import atomic_write_json
 
 from PySide6.QtCore import QStandardPaths
 
@@ -24,6 +26,10 @@ class AppConfig:
     # Installation selected last, reselected at startup so its history of
     # controls is on screen without loading an image
     last_device_id: str = ""
+
+    # Names printed in the validation block of the last report, offered again
+    last_performed_by: str = ""
+    last_validated_by: str = ""
 
     # UI settings
     theme: str = "dark"  # "dark" or "light"
@@ -62,8 +68,8 @@ class AppConfig:
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-            except (OSError, ValueError, TypeError):
+                return cls._from_dict(data)
+            except (OSError, ValueError, TypeError, AttributeError):
                 try:
                     config_path.replace(config_path.with_suffix(".json.bak"))
                 except OSError:
@@ -77,11 +83,35 @@ class AppConfig:
             pass  # Read-only config dir: run with defaults, do not crash at startup
         return config
 
+    @classmethod
+    def _from_dict(cls, data: dict) -> "AppConfig":
+        """Settings from a stored dict; a value of the wrong type falls back to its default.
+
+        A hand-edited file ("report_logo_scale": "40 %") must not surface later
+        as a TypeError in the dialog that uses the value.
+        """
+        config = cls()
+        for f in fields(cls):
+            if f.name not in data:
+                continue
+            value, default = data[f.name], getattr(config, f.name)
+            if isinstance(default, bool):
+                valid = isinstance(value, bool)
+            elif isinstance(default, float):
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+                value = float(value) if valid else value
+            else:
+                valid = isinstance(value, type(default))
+            if valid:
+                setattr(config, f.name, value)
+        if config.theme not in ("dark", "light"):
+            config.theme = "dark"
+        config.report_logo_scale = min(1.0, max(0.1, config.report_logo_scale))
+        return config
+
     def save(self):
-        """Save config to file."""
-        config_path = self.config_path()
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2, ensure_ascii=False)
+        """Save config to file (atomically: an interrupted write keeps the previous file)."""
+        atomic_write_json(self.config_path(), asdict(self))
 
 
 # Singleton instance

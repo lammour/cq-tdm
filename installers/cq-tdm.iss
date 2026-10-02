@@ -17,7 +17,11 @@
     Copy(Local[1], Local[2], Pos('"', Copy(Local[1], Local[2])) - 1)
 
 #define MyAppName "CQ TDM"
-#define MyAppVersion ParseVersion()
+; The build workflow passes the version (iscc /DMyAppVersion=x.y.z); the line
+; parsing above is only the fallback of a build by hand
+#ifndef MyAppVersion
+  #define MyAppVersion ParseVersion()
+#endif
 #define MyAppPublisher "Luis"
 #define MyAppURL "https://github.com/lammour/cq-tdm"
 #define MyAppExeName "CQ_TDM.exe"

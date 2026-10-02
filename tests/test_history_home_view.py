@@ -78,8 +78,8 @@ def test_export_asks_before_an_incomplete_control(qapp, config, monkeypatch):
 
     make_device(DeviceDatabase(Path(config.device_database_path)), "CT1", runs=1)
     window = mw.MainWindow()
-    window._current_results = SimpleNamespace(water_ct_number=0.5, uniformity=1.0)
-    window._nps_results = SimpleNamespace(mean_frequency=0.3, noise=3.0)
+    window._current_results = SimpleNamespace(water_ct_number=0.5, uniformity=1.0, phantom_detected=True)
+    window._nps_results = SimpleNamespace(mean_frequency=0.3, noise=3.0, phantom_detected=True)
     window._edit_ref_noise.setText("3,0")
     window._edit_ref_nps_freq.setText("0,300")
     window._artifact_result = False
