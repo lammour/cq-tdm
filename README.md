@@ -38,7 +38,8 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Chaque rapport exporté est enregistré comme un contrôle de l'installation (date d'acquisition, paramètres, mesures, statuts, valeurs de référence en vigueur, chemin du PDF)
   - Onglet « Historique » : tableau des contrôles et graphique de tendance par grandeur avec la bande de tolérance ANSM ; un clic sur un point sélectionne le contrôle
   - L'historique de la dernière installation utilisée est affiché dès le lancement, sans charger d'image
-  - Définition des valeurs de référence à partir d'un contrôle passé, export CSV, ouverture du rapport PDF associé
+  - Définition des valeurs de référence à partir d'un contrôle passé, ouverture du rapport PDF associé
+  - Export CSV de l'historique, au format français par défaut (colonnes séparées par « ; », virgule décimale) ; « Configuration > Export CSV au format anglais » le passe en virgule et point décimal
   - Saisie de la date et de la nature de l'action corrective réalisée après un contrôle
   - « Charger la série DICOM » : recharge les images d'un contrôle passé dans la visionneuse avec les coupes utilisées à l'époque ; si le dossier a été déplacé, il peut être localisé ou recherché dans un dossier d'archive, la série étant vérifiée par son identifiant DICOM
 - **Base de données des installations** :
