@@ -111,7 +111,7 @@ class QCRun:
     corrective_action_date: str = ""
     corrective_action: str = ""
     # Type of control (CONTROL_TYPES or free text) and the names printed in the
-    # validation block of the report; "" on runs recorded by versions up to 0.8
+    # validation block of the report; "" on runs recorded before 0.8.1
     control_type: str = ""
     performed_by: str = ""
     validated_by: str = ""
