@@ -64,6 +64,11 @@ class DeviceConfig:
     hu_slice_index: int | None = None  # HU analysis slice index
     nps_start_slice: int | None = None  # NPS analysis start slice
     nps_end_slice: int | None = None  # NPS analysis end slice
+    # Number of slices of the series the three indices above were chosen on.
+    # They only mean something on a series of that length: on another one they
+    # are not applied (the decision asks for the central slice). None on
+    # installations saved before this was recorded.
+    slices_series_length: int | None = None
 
     # ROI sizes and offsets frozen from the reference control, so that every
     # later control uses identical ROIs (see core.roi_geometry)

@@ -43,7 +43,9 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - « Charger la série DICOM » : recharge les images d'un contrôle passé dans la visionneuse avec les coupes utilisées à l'époque ; si le dossier a été déplacé, il peut être localisé ou recherché dans un dossier d'archive, la série étant vérifiée par son identifiant DICOM
 - **Base de données des installations** :
   - Enregistrement des valeurs de référence (magnitude du bruit et fréquence moyenne du SPB), des informations d'identification, des informations du registre des opérations, des coupes de mesure et de la géométrie des ROI
-  - Une seule fenêtre « Gestion des installations » pour créer, modifier et supprimer les installations, utilisable sans image chargée
+  - Une seule fenêtre « Gestion des installations » pour créer, modifier et supprimer les installations, utilisable sans image chargée ; elle demande confirmation avant d'abandonner une saisie non enregistrée
+  - Les coupes mémorisées pour une installation ne sont appliquées qu'aux séries du même nombre de coupes ; sinon les coupes centrales sont proposées et le logiciel le signale
+  - La définition des valeurs de référence rappelle les valeurs qu'elle remplace
   - Détection automatique des installations enregistrées ; une série anonymisée, qui n'identifie pas le scanner, est rattachée à son installation à la main
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
     - Chaque enregistrement relit le fichier et n'y ajoute que ce que le poste a modifié : deux postes qui enregistrent chacun un contrôle les conservent tous les deux. Seule limite : si deux postes modifient en même temps le même champ de la même installation, la dernière saisie l'emporte

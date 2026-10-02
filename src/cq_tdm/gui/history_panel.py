@@ -383,6 +383,7 @@ class HistoryPanel(QWidget):
         ]
         if run.hu_slice_index is not None:
             lines.append(f"Coupe UH {run.hu_slice_index + 1}"
+                         + (f" / {run.num_slices}" if run.num_slices else "")
                          + (f" · SPB {run.nps_start_slice + 1}–{run.nps_end_slice + 1}"
                             if run.nps_start_slice is not None and run.nps_end_slice is not None else ""))
         if run.corrective_action_date or run.corrective_action:
