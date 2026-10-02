@@ -102,3 +102,60 @@ def test_forgotten_installation_falls_back(qapp, config):
     config.last_device_id = "deleted-device"
     window = mw.MainWindow()
     assert window._current_device.device_id == only.device_id
+
+
+def test_controls_recorded_on_another_workstation_appear(qapp, config):
+    """The database is re-read when it changed on disk, without restarting."""
+    path = Path(config.device_database_path)
+    only = make_device(DeviceDatabase(path), "CT1", runs=1)
+    window = mw.MainWindow()
+    assert window.history_panel._table.rowCount() == 1
+    shown_device = window._current_device
+
+    elsewhere = DeviceDatabase(path)
+    elsewhere.add_run(only.device_id, QCRun(run_date="2026-08-01", series_uid="autre-poste"))
+    elsewhere.save_device(DeviceConfig.from_dicom("ACME", "CT2", "ST", "CT2"))
+
+    window._refresh_database(force=True)
+    assert window._current_device is shown_device  # same object, updated in place
+    assert window.history_panel._table.rowCount() == 2
+    assert window._device_combo.count() == 3  # placeholder + the two installations
+    assert "mise à jour depuis un autre poste" in window.statusbar.currentMessage()
+
+    # Nothing changed since: no reload, no message
+    window.statusbar.clearMessage()
+    window._refresh_database(force=True)
+    assert window.statusbar.currentMessage() == ""
+
+
+def test_installation_deleted_on_another_workstation_is_dropped(qapp, config):
+    path = Path(config.device_database_path)
+    db = DeviceDatabase(path)
+    first = make_device(db, "CT1", runs=1)
+    second = make_device(db, "CT2", runs=2)
+    config.last_device_id = first.device_id
+    window = mw.MainWindow()
+    assert window._current_device.device_id == first.device_id
+
+    DeviceDatabase(path).delete_device(first.device_id)
+    window._refresh_database(force=True)
+    assert window._current_device.device_id == second.device_id  # the only one left
+    assert window.history_panel._table.rowCount() == 2
+
+
+def test_unreachable_database_folder_is_announced(qapp, config, tmp_path, monkeypatch):
+    """A network share that is not mounted must not look like an empty database."""
+    config.device_database_path = str(tmp_path / "partage" / "devices.json")
+    shown = []
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda parent, title, text: shown.append(text))
+    window = mw.MainWindow()
+    mw.warn_database_load(window, window._device_db)
+    assert "est inaccessible" in shown[0] and "partage réseau" in shown[0]
+    assert window._device_db.read_only
+
+    # The share comes back: its installations show up at the next check
+    (tmp_path / "partage").mkdir()
+    make_device(DeviceDatabase(Path(config.device_database_path)), "CT1", runs=3)
+    window._refresh_database(force=True)
+    assert window._current_device is not None
+    assert window.history_panel._table.rowCount() == 3

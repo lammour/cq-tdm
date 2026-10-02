@@ -3,11 +3,12 @@
 import base64
 import html
 import logging
+import time
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QEventLoop, QTimer, QRegularExpression, QDate
+from PySide6.QtCore import Qt, QEvent, QEventLoop, QTimer, QRegularExpression, QDate
 from PySide6.QtGui import QShortcut, QKeySequence, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QApplication,
@@ -101,7 +102,26 @@ from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 def warn_database_load(parent, db: DeviceDatabase) -> None:
     """Tell the user what could not be read from the installations database, if anything."""
-    if db.load_error:
+    if db.read_only and db.load_error:
+        # The folder itself is missing: typically a network share not mounted
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            f"Le dossier de la base de données des installations est inaccessible :\n"
+            f"{db.db_path.parent}\n\n"
+            "Vérifiez que le partage réseau est connecté. En attendant, aucune installation "
+            "n'est affichée et rien ne peut être enregistré : la base sera relue dès qu'elle "
+            "sera de nouveau accessible.",
+        )
+    elif db.read_only:
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            "Cette base de données a été écrite par une version plus récente de CQ TDM.\n\n"
+            "Les installations et leurs contrôles sont affichés, mais rien ne peut être "
+            "enregistré depuis ce poste tant que CQ TDM n'y est pas mis à jour.",
+        )
+    elif db.load_error:
         QMessageBox.warning(
             parent,
             "Base de données des installations",
@@ -1343,8 +1363,10 @@ class MainWindow(QMainWindow):
         db_path = Path(config.device_database_path) if config.device_database_path else None
         self._device_db = DeviceDatabase(db_path)
         self._current_device: DeviceConfig | None = None
-        if self._device_db.load_error or self._device_db.load_warnings:
+        if self._device_db.load_error or self._device_db.load_warnings or self._device_db.read_only:
             QTimer.singleShot(0, lambda: warn_database_load(self, self._device_db))
+        # When the database file was last checked for changes made elsewhere
+        self._database_checked_at: float = time.monotonic()
 
         # Report metadata (empty by default, shown as grey placeholders in UI)
         self._hospital_name: str = ""
@@ -1931,6 +1953,57 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
         )
         if folder_path:
             self._load_dicom_folder(folder_path)
+
+    # ---- database shared with other workstations ----
+
+    # Seconds between two checks of the database file when the window is activated
+    DATABASE_CHECK_INTERVAL_S = 5.0
+
+    def changeEvent(self, event):
+        """Coming back to the window: take in what other workstations recorded meanwhile."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._refresh_database()
+
+    def _refresh_database(self, force: bool = False):
+        """Re-read the installations database if another workstation changed it.
+
+        Costs one `stat` of the file, at most every DATABASE_CHECK_INTERVAL_S
+        unless `force` is set.
+        """
+        now = time.monotonic()
+        if not force and now - self._database_checked_at < self.DATABASE_CHECK_INTERVAL_S:
+            return
+        self._database_checked_at = now
+        try:
+            changed = self._device_db.refresh()
+        except Exception:
+            logger.exception("Refreshing the installations database failed")
+            return
+        if self._device_db.take_foreign_changes() or changed:
+            self._on_database_refreshed()
+
+    def _on_database_refreshed(self):
+        """Show the state of the database after changes made on another workstation."""
+        current = self._current_device
+        if current is not None and self._device_db.get_device(current.device_id) is not current:
+            current = None  # deleted on another workstation
+        if current is not None:
+            # Objects are updated in place: only what shows them needs redrawing.
+            # The slices chosen in the viewer are the user's, they are left alone.
+            self._current_device = current
+            self._load_device_config(current, apply_slices=False)
+            self._refresh_device_combo()
+        elif self._current_image is not None:
+            # Its installation may just have been created elsewhere
+            self._current_device = None
+            self._try_auto_detect_device()
+            self._refresh_device_combo()
+        else:
+            self._select_device(self._default_device())
+        self._update_results_display()
+        self.statusbar.showMessage(
+            "Base de données des installations mise à jour depuis un autre poste", 6000)
 
     def dragEnterEvent(self, event):
         """Accept drag events containing folders or files."""
@@ -3963,8 +4036,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                              f"{date_link}modifier</a>")
         self._install_summary.setText(f"{saved}<br>{ref_line}{modified}{slice_line}{date_line}")
 
-    def _load_device_config(self, device: DeviceConfig | None):
-        """Load device configuration into the UI fields."""
+    def _load_device_config(self, device: DeviceConfig | None, apply_slices: bool = True):
+        """Load device configuration into the UI fields.
+
+        `apply_slices` moves the viewer to the slices saved for the device; it
+        is off when the device is merely redrawn after a database refresh.
+        """
         self._refresh_history(device)
         if device is not None:
             self._remember_device(device)
@@ -4020,9 +4097,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                     lo = max(0, min(self._saved_nps_start, last))
                     hi = max(0, min(self._saved_nps_end, last))
                     self._saved_nps_start, self._saved_nps_end = min(lo, hi), max(lo, hi)
-                if device.hu_slice_index is not None:
+                if apply_slices and device.hu_slice_index is not None:
                     self.image_viewer.set_hu_slice_index(device.hu_slice_index)
-                if device.nps_start_slice is not None and device.nps_end_slice is not None:
+                if apply_slices and device.nps_start_slice is not None and device.nps_end_slice is not None:
                     self.image_viewer.set_nps_slice_range(device.nps_start_slice, device.nps_end_slice)
 
     def _try_auto_detect_device(self):
@@ -4062,6 +4139,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _show_device_manager(self):
         """Open the installations window, then take its changes into account."""
+        # Edit the installations as they are now, not as they were at startup
+        self._refresh_database(force=True)
         current_slices = None
         if self._current_series is not None:
             start, end = self.image_viewer.get_nps_slice_range()

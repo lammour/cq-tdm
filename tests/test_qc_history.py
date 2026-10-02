@@ -268,7 +268,7 @@ def test_unreadable_entries_do_not_hide_the_rest_and_survive_a_save(tmp_path):
     saved = json.loads(db_path.read_text(encoding="utf-8"))
     assert bad_run in saved["devices"][0]["runs"]
     assert bad_device in saved["devices"]
-    assert not list(tmp_path.glob("devices.json.*.bak"))
+    assert not list(tmp_path.glob("devices.json.illisible-*.bak"))
 
 
 def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
@@ -277,7 +277,7 @@ def test_unparsable_file_still_sets_load_error_and_backs_up(tmp_path):
     db = DeviceDatabase(db_path)
     assert db.load_error and db.get_all_devices() == [] and db.load_warnings == []
     # The copy is dated, so a later failure cannot overwrite it
-    (backup,) = tmp_path.glob("devices.json.*.bak")
+    (backup,) = tmp_path.glob("devices.json.illisible-*.bak")
     assert backup.read_text(encoding="utf-8") == "{ not json"
 
     # A file that is merely probed (the user pointing at it) is left alone

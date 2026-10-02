@@ -46,6 +46,11 @@ CQ TDM (ou cq-tdm) analyse les images DICOM de fantômes cylindriques remplis d'
   - Une seule fenêtre « Gestion des installations » pour créer, modifier et supprimer les installations, utilisable sans image chargée
   - Détection automatique des installations enregistrées ; une série anonymisée, qui n'identifie pas le scanner, est rattachée à son installation à la main
   - Possibilité d'utiliser une base de données commune et en réseau entre plusieurs postes
+    - Chaque enregistrement relit le fichier et n'y ajoute que ce que le poste a modifié : deux postes qui enregistrent chacun un contrôle les conservent tous les deux. Seule limite : si deux postes modifient en même temps le même champ de la même installation, la dernière saisie l'emporte
+    - Les contrôles enregistrés sur un autre poste apparaissent quand la fenêtre revient au premier plan
+    - Si le dossier de la base est inaccessible (partage réseau non connecté), le logiciel le signale et n'enregistre rien tant qu'il n'est pas revenu ; il n'affiche pas une base vide à sa place
+    - Une base écrite par une version plus récente du logiciel est affichée mais ne peut pas être modifiée
+    - Une copie datée du fichier (`devices.json.AAAA-MM-JJ.bak`) est gardée à côté de lui avant la première écriture de chaque jour ; les dix dernières sont conservées
   - L'historique des contrôles est stocké dans le même fichier que les installations (`devices.json`)
 
 
