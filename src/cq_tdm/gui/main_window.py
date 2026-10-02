@@ -3,11 +3,12 @@
 import base64
 import html
 import logging
+import time
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QEventLoop, QTimer, QRegularExpression, QDate
+from PySide6.QtCore import Qt, QEvent, QEventLoop, QTimer, QRegularExpression, QDate
 from PySide6.QtGui import QShortcut, QKeySequence, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,7 +51,7 @@ from ..core.dicom_locator import (
     find_series_folder, folder_matches, relative_to_database, relocation_between, resolve_dicom_folder,
 )
 from .history_panel import HistoryPanel
-from .messages import ask, french_button_box
+from .messages import ask, ask_save, french_button_box
 
 # Heavy imports - deferred via lazy __init__.py (pydicom, numpy, scipy)
 from ..core import (
@@ -101,7 +102,26 @@ from .image_viewer import ImageViewerWidget, ROI, ArtifactInspectionDialog
 
 def warn_database_load(parent, db: DeviceDatabase) -> None:
     """Tell the user what could not be read from the installations database, if anything."""
-    if db.load_error:
+    if db.read_only and db.load_error:
+        # The folder itself is missing: typically a network share not mounted
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            f"Le dossier de la base de données des installations est inaccessible :\n"
+            f"{db.db_path.parent}\n\n"
+            "Vérifiez que le partage réseau est connecté. En attendant, aucune installation "
+            "n'est affichée et rien ne peut être enregistré : la base sera relue dès qu'elle "
+            "sera de nouveau accessible.",
+        )
+    elif db.read_only:
+        QMessageBox.warning(
+            parent,
+            "Base de données des installations",
+            "Cette base de données a été écrite par une version plus récente de CQ TDM.\n\n"
+            "Les installations et leurs contrôles sont affichés, mais rien ne peut être "
+            "enregistré depuis ce poste tant que CQ TDM n'y est pas mis à jour.",
+        )
+    elif db.load_error:
         QMessageBox.warning(
             parent,
             "Base de données des installations",
@@ -122,6 +142,45 @@ def warn_database_load(parent, db: DeviceDatabase) -> None:
         )
 
 
+def reference_question(
+    installation: str,
+    old_noise: float | None,
+    old_nps_freq: float | None,
+    noise: float,
+    nps_freq: float | None,
+    source: str,
+    freezes_geometry: bool,
+) -> tuple[str, str]:
+    """(text, label of the accept button) of the question asked before defining references.
+
+    Reference values decide every later verdict of stability: the question
+    shows what is replaced, so that an established reference is not
+    overwritten unnoticed.
+    """
+    replacing = old_noise is not None or old_nps_freq is not None
+
+    def change(old: float | None, new: float, decimals: int, unit: str) -> str:
+        if not replacing:
+            return f"{format_fr(new, decimals)} {unit}"
+        before = format_fr(old, decimals) if old is not None else "non définie"
+        return f"{before} → {format_fr(new, decimals)} {unit}"
+
+    lines = [f"σ : {change(old_noise, noise, 2, 'UH')}"]
+    if nps_freq is not None:
+        lines.append(f"f SPB : {change(old_nps_freq, nps_freq, 3, 'c/mm')}")
+    elif old_nps_freq is not None:
+        lines.append(f"f SPB : {format_fr(old_nps_freq, 3)} c/mm (inchangée, SPB non mesuré)")
+
+    verb = "Remplacer" if replacing else "Définir"
+    text = (f"{verb} les valeurs de référence de « {installation} » ({source}) ?\n\n"
+            + "\n".join(lines)
+            + "\n\nLes prochains contrôles seront jugés par rapport à ces valeurs.")
+    if freezes_geometry:
+        text += (" Les tailles et positions des ROI de ce contrôle seront figées et "
+                 "réutilisées à l'identique.")
+    return text, "Remplacer" if replacing else "Définir comme références"
+
+
 class DeviceManagerDialog(QDialog):
     """The one window where installations are created, edited and deleted.
 
@@ -139,6 +198,7 @@ class DeviceManagerDialog(QDialog):
         select_device_id: str | None = None,
         current_image: DicomImage | None = None,
         current_slices: tuple[int, int, int] | None = None,
+        current_series_length: int | None = None,
         current_analysis: tuple[float, float | None, ROIGeometry | None] | None = None,
         image_device_id: str | None = None,
     ):
@@ -155,6 +215,9 @@ class DeviceManagerDialog(QDialog):
                 current_image.station_name or "", current_image.device_serial_number or "") or None
         self.image_device_id = image_device_id
         self.current_slices = current_slices  # (hu, nps_start, nps_end), 0-based
+        # Number of slices of the loaded series: saved with the slices, which
+        # only apply to a series of that length
+        self.current_series_length = current_series_length
         # (noise, SPB mean frequency or None, ROI geometry or None) of the
         # analysis on screen, offered as reference values
         self.current_analysis = current_analysis
@@ -392,11 +455,19 @@ class DeviceManagerDialog(QDialog):
         scroll.setWidget(form)
         right_layout.addWidget(scroll, 1)
 
-        # Save button
+        # Save and close buttons
+        buttons_row = QHBoxLayout()
         self._btn_save = QPushButton("Enregistrer les modifications")
         self._btn_save.setEnabled(False)
         self._btn_save.clicked.connect(self._save_current_device)
-        right_layout.addWidget(self._btn_save)
+        buttons_row.addWidget(self._btn_save, 1)
+        btn_close = QPushButton("Fermer")
+        btn_close.setAutoDefault(False)
+        btn_close.clicked.connect(self.reject)
+        buttons_row.addWidget(btn_close)
+        right_layout.addLayout(buttons_row)
+        # Content of the form when it was last loaded or saved (see _is_dirty)
+        self._loaded_form: tuple = ()
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #888; font-size: 11px;")
         right_layout.addWidget(self._status_label)
@@ -445,8 +516,67 @@ class DeviceManagerDialog(QDialog):
                        "(identifiée par fabricant, modèle, station et n° de série DICOM)")
         self._btn_new_from_image.setToolTip(tooltip)
 
+    def _form_values(self) -> tuple:
+        """What is typed in the form, to tell whether it differs from what was loaded."""
+        edits = [self._edit_hospital, self._edit_location, self._edit_device,
+                 self._edit_commissioning, self._edit_serial_number, self._edit_inventory,
+                 self._edit_ref_noise, self._edit_ref_nps_freq, *self._edit_register.values()]
+        return tuple(edit.text() for edit in edits)
+
+    def _is_dirty(self) -> bool:
+        """True when the form holds changes that were not saved."""
+        return self._current_device is not None and self._form_values() != self._loaded_form
+
+    def _confirm_pending_edits(self) -> bool:
+        """Before leaving the installation being edited: save, drop or stay.
+
+        Returns False when the user chooses to stay (or the save fails), in
+        which case the caller must not move on.
+        """
+        if not self._is_dirty():
+            return True
+        device = self._current_device
+        choice = ask_save(
+            self, "Modifications non enregistrées",
+            f"Les modifications de « {device.display_name()} » ne sont pas enregistrées.")
+        if choice == "cancel":
+            return False
+        if choice == "save":
+            self._apply_form_to_device()
+            try:
+                self.device_db.save_device(device)
+            except OSError as e:
+                QMessageBox.warning(self, "Enregistrement",
+                                    f"Impossible d'enregistrer l'installation :\n{e}")
+                return False
+            self._remember_database_path()
+            self._relabel_device(device)
+        self._loaded_form = self._form_values()  # nothing pending any more
+        return True
+
+    def _relabel_device(self, device: DeviceConfig):
+        """Refresh the list entry of `device` after its name changed."""
+        for row in range(self._device_list.count()):
+            item = self._device_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == device.device_id:
+                label = device.display_name()
+                if device.device_id == self._image_device_id():
+                    label += "   (image chargée)"
+                item.setText(label)
+
+    def reject(self):
+        """Close the window (button, Escape or the title bar cross), unless edits must be kept."""
+        if self._confirm_pending_edits():
+            super().reject()
+
     def _on_device_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
         """Handle device selection."""
+        if previous is not None and current is not previous and not self._confirm_pending_edits():
+            # Stay on the installation being edited
+            self._device_list.blockSignals(True)
+            self._device_list.setCurrentItem(previous)
+            self._device_list.blockSignals(False)
+            return
         if current is None:
             self._current_device = None
             self._clear_form()
@@ -529,13 +659,16 @@ class DeviceManagerDialog(QDialog):
 
         # Slice positions (displayed as 1-based for user)
         if device.hu_slice_index is not None:
-            self._label_hu_slice.setText(str(device.hu_slice_index + 1))
+            on = (f" (série de {device.slices_series_length} coupes)"
+                  if device.slices_series_length else "")
+            self._label_hu_slice.setText(f"{device.hu_slice_index + 1}{on}")
         else:
             self._label_hu_slice.setText("—")
         if device.nps_start_slice is not None and device.nps_end_slice is not None:
             self._label_nps_range.setText(f"{device.nps_start_slice + 1} - {device.nps_end_slice + 1}")
         else:
             self._label_nps_range.setText("—")
+        self._loaded_form = self._form_values()
 
     def _clear_form(self):
         """Clear the form fields."""
@@ -564,6 +697,7 @@ class DeviceManagerDialog(QDialog):
         self._btn_delete.setEnabled(False)
         self._btn_save.setEnabled(False)
         self._status_label.setText("")
+        self._loaded_form = self._form_values()
 
     def _save_current_device(self):
         """Save modifications to the current device."""
@@ -646,6 +780,7 @@ class DeviceManagerDialog(QDialog):
         device.device_name = f"{img.manufacturer or ''} {img.model_name or ''}".strip()
         if self.current_slices is not None:
             device.hu_slice_index, device.nps_start_slice, device.nps_end_slice = self.current_slices
+            device.slices_series_length = self.current_series_length
         self._persist(device, "Installation créée : complétez ses informations puis enregistrez")
         self._edit_hospital.setFocus()
 
@@ -709,6 +844,7 @@ class DeviceManagerDialog(QDialog):
         hu, start, end = self.current_slices
         self._apply_form_to_device()  # keep what was typed in the other fields
         self._current_device.hu_slice_index = hu
+        self._current_device.slices_series_length = self.current_series_length
         self._current_device.nps_start_slice = start
         self._current_device.nps_end_slice = end
         self._persist(self._current_device, "Coupes mémorisées")
@@ -722,12 +858,15 @@ class DeviceManagerDialog(QDialog):
         if self._current_device is None or self.current_analysis is None:
             return
         noise, nps_freq, geometry = self.current_analysis
-        nps_text = f" et f SPB = {format_fr(nps_freq, 3)} c/mm" if nps_freq is not None else ""
-        if not ask(
-                self, "Valeurs de référence",
-                f"Définir σ = {format_fr(noise, 2)} UH{nps_text} (analyse en cours) "
-                "comme valeurs de référence de cette installation ?",
-                "Définir comme références", "Annuler"):
+        # What is replaced is what the form shows, saved or just typed
+        old_noise_text = self._edit_ref_noise.text().strip()
+        old_nps_text = self._edit_ref_nps_freq.text().strip()
+        text, accept = reference_question(
+            self._current_device.display_name(),
+            parse_float_fr(old_noise_text) if old_noise_text else None,
+            parse_float_fr(old_nps_text) if old_nps_text else None,
+            noise, nps_freq, "analyse en cours", geometry is not None)
+        if not ask(self, "Valeurs de référence", text, accept, "Annuler"):
             return
         self._apply_form_to_device()  # keep what was typed in the other fields
         self._current_device.reference_noise = noise
@@ -776,6 +915,8 @@ class DeviceManagerDialog(QDialog):
 
     def _select_database(self):
         """Open an existing database file."""
+        if not self._confirm_pending_edits():
+            return
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Ouvrir une base de données",
@@ -787,6 +928,8 @@ class DeviceManagerDialog(QDialog):
 
     def _create_new_database(self):
         """Create a new database file."""
+        if not self._confirm_pending_edits():
+            return
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Créer une nouvelle base de données",
@@ -807,6 +950,9 @@ class DeviceManagerDialog(QDialog):
     def _move_database(self):
         """Move the current database to a new location."""
         import shutil
+
+        if not self._confirm_pending_edits():
+            return
 
         # Check if database exists
         if not self.device_db.db_path.exists():
@@ -1343,8 +1489,10 @@ class MainWindow(QMainWindow):
         db_path = Path(config.device_database_path) if config.device_database_path else None
         self._device_db = DeviceDatabase(db_path)
         self._current_device: DeviceConfig | None = None
-        if self._device_db.load_error or self._device_db.load_warnings:
+        if self._device_db.load_error or self._device_db.load_warnings or self._device_db.read_only:
             QTimer.singleShot(0, lambda: warn_database_load(self, self._device_db))
+        # When the database file was last checked for changes made elsewhere
+        self._database_checked_at: float = time.monotonic()
 
         # Report metadata (empty by default, shown as grey placeholders in UI)
         self._hospital_name: str = ""
@@ -1378,6 +1526,9 @@ class MainWindow(QMainWindow):
         self._saved_hu_slice: int | None = None
         self._saved_nps_start: int | None = None
         self._saved_nps_end: int | None = None
+        # (length the saved slices were chosen on, length of the loaded series)
+        # when they differ: the saved slices are then not applied
+        self._saved_slices_mismatch: tuple[int, int] | None = None
 
         self._setup_menu()
         self._setup_ui()
@@ -1421,6 +1572,15 @@ class MainWindow(QMainWindow):
         config_menu = menubar.addMenu("&Configuration")
         config_menu.addAction("Gestion des installations…", self._show_device_manager)
         config_menu.addAction("Rapports…", self._show_report_settings)
+        config_menu.addSeparator()
+        self._csv_english_action = config_menu.addAction(
+            "Export CSV au format anglais (virgule, point décimal)")
+        self._csv_english_action.setCheckable(True)
+        self._csv_english_action.setChecked(get_app_config().csv_format == "en")
+        self._csv_english_action.setToolTip(
+            "Décoché : colonnes séparées par « ; » et virgule décimale, pour un tableur en français")
+        self._csv_english_action.triggered.connect(self._toggle_csv_format)
+        config_menu.setToolTipsVisible(True)
 
         # Help menu
         help_menu = menubar.addMenu("&Aide")
@@ -1598,21 +1758,31 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_PageUp), self, self._prev_10_slices)
         QShortcut(QKeySequence(Qt.Key.Key_PageDown), self, self._next_10_slices)
 
-        # Go to HU slice position
-        QShortcut(QKeySequence("H"), self, self._go_to_hu_slice)
+    # Characters that zoom in and out. Several each, so that neither Shift nor
+    # a given keyboard layout is needed: "=" and "+" share a key on QWERTY and
+    # AZERTY; "-" and "_" share one on QWERTY, "-" and "6" on AZERTY.
+    ZOOM_IN_CHARACTERS = "+="
+    ZOOM_OUT_CHARACTERS = "-_6"
 
-        # Go to center of NPS range
-        QShortcut(QKeySequence("N"), self, self._go_to_nps_center)
-
-        # View controls
-        QShortcut(QKeySequence("F"), self, self._fit_image_to_view)
-        QShortcut(QKeySequence("R"), self, self._reset_view)
-        QShortcut(QKeySequence("U"), self, self._toggle_water_rois)
-        QShortcut(QKeySequence("S"), self, self._toggle_nps_rois)
-        QShortcut(QKeySequence("I"), self, self._toggle_info_overlays)
-
-        # Analysis
-        QShortcut(QKeySequence("A"), self, self._inspect_artifacts)
+    def keyPressEvent(self, event):
+        """Zoom keys. They are matched on the character typed, not on the key:
+        the same code then works on every layout and on the numeric keypad. A
+        field that has the focus takes its characters first, so "-6" typed in a
+        number box never reaches this.
+        """
+        commands = (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+                    | Qt.KeyboardModifier.MetaModifier)
+        character = event.text()
+        if character and not (event.modifiers() & commands) and self._current_image is not None:
+            if character in self.ZOOM_IN_CHARACTERS:
+                self.image_viewer.viewer.zoom_step(+1)
+                event.accept()
+                return
+            if character in self.ZOOM_OUT_CHARACTERS:
+                self.image_viewer.viewer.zoom_step(-1)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _prev_slice(self):
         """Go to previous slice."""
@@ -1650,39 +1820,6 @@ class MainWindow(QMainWindow):
             current = self.image_viewer.slice_slider.value()
             self.image_viewer.slice_slider.setValue(min(self._current_series.num_images - 1, current + 10))
 
-    def _go_to_hu_slice(self):
-        """Go to the HU analysis slice."""
-        if self._current_series:
-            hu_slice = self.image_viewer.get_hu_slice_index()
-            self.image_viewer.slice_slider.setValue(hu_slice)
-
-    def _go_to_nps_center(self):
-        """Go to the center of the NPS range."""
-        if self._current_series:
-            start, end = self.image_viewer.get_nps_slice_range()
-            center = (start + end) // 2
-            self.image_viewer.slice_slider.setValue(center)
-
-    def _fit_image_to_view(self):
-        """Fit the image to the viewer (reset zoom)."""
-        self.image_viewer._reset_zoom()
-
-    def _reset_view(self):
-        """Reset the entire view (slice, zoom, W/L, analysis slices)."""
-        self.image_viewer._reset_all()
-
-    def _toggle_water_rois(self):
-        """Toggle water phantom ROI visibility."""
-        self.image_viewer._toggle_water_rois()
-
-    def _toggle_nps_rois(self):
-        """Toggle NPS ROI visibility."""
-        self.image_viewer._toggle_nps_rois()
-
-    def _toggle_info_overlays(self):
-        """Toggle the image information and folder path shown over the image."""
-        self.image_viewer._toggle_info_overlays()
-
     def _show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
         shortcuts = """
@@ -1691,22 +1828,12 @@ class MainWindow(QMainWindow):
 <tr><td width="120"><b>←</b> / <b>→</b></td><td>Coupe précédente / suivante</td></tr>
 <tr><td><b>Page préc.</b> / <b>Page suiv.</b></td><td>Sauter 10 coupes</td></tr>
 <tr><td><b>Début</b> / <b>Fin</b></td><td>Première / dernière coupe</td></tr>
-<tr><td><b>H</b></td><td>Aller à la coupe UH</td></tr>
-<tr><td><b>N</b></td><td>Aller au centre de la plage SPB</td></tr>
 </table>
 
-<h3>Affichage</h3>
+<h3>Zoom</h3>
 <table>
-<tr><td width="120"><b>F</b></td><td>Ajuster l'image à la vue</td></tr>
-<tr><td><b>R</b></td><td>Réinitialiser l'affichage et remettre les coupes d'analyse au centre de la série</td></tr>
-<tr><td><b>U</b></td><td>Afficher/masquer les ROI UH (jaune et cyan)</td></tr>
-<tr><td><b>S</b></td><td>Afficher/masquer les ROI SPB (vert)</td></tr>
-<tr><td><b>I</b></td><td>Afficher/masquer les informations sur l'image</td></tr>
-</table>
-
-<h3>Analyse</h3>
-<table>
-<tr><td width="120"><b>A</b></td><td>Inspection des artéfacts</td></tr>
+<tr><td width="120"><b>+</b> ou <b>=</b></td><td>Zoom avant</td></tr>
+<tr><td><b>-</b>, <b>_</b> ou <b>6</b></td><td>Zoom arrière</td></tr>
 </table>
 
 <h3>Fichiers et fenêtres</h3>
@@ -1750,7 +1877,7 @@ décision ANSM du 18/12/2025 (section 9.1.7).</p>
     <li><i>Coupes SPB</i> : plage de 10 coupes centrées pour le bruit et le spectre de puissance du bruit</li>
     </ul>
 </li>
-<li><b>Inspecter les artéfacts</b> (touche A) : vérifiez visuellement l'absence d'artéfacts
+<li><b>Inspecter les artéfacts</b> (bouton « Inspection visuelle des artéfacts ») : vérifiez visuellement l'absence d'artéfacts
 cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
 <li><b>Enregistrer le contrôle et exporter le PDF</b> (Ctrl+E) : enregistre le contrôle dans l'historique de l'installation et génère le rapport conforme</li>
 </ol>
@@ -1931,6 +2058,57 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
         )
         if folder_path:
             self._load_dicom_folder(folder_path)
+
+    # ---- database shared with other workstations ----
+
+    # Seconds between two checks of the database file when the window is activated
+    DATABASE_CHECK_INTERVAL_S = 5.0
+
+    def changeEvent(self, event):
+        """Coming back to the window: take in what other workstations recorded meanwhile."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._refresh_database()
+
+    def _refresh_database(self, force: bool = False):
+        """Re-read the installations database if another workstation changed it.
+
+        Costs one `stat` of the file, at most every DATABASE_CHECK_INTERVAL_S
+        unless `force` is set.
+        """
+        now = time.monotonic()
+        if not force and now - self._database_checked_at < self.DATABASE_CHECK_INTERVAL_S:
+            return
+        self._database_checked_at = now
+        try:
+            changed = self._device_db.refresh()
+        except Exception:
+            logger.exception("Refreshing the installations database failed")
+            return
+        if self._device_db.take_foreign_changes() or changed:
+            self._on_database_refreshed()
+
+    def _on_database_refreshed(self):
+        """Show the state of the database after changes made on another workstation."""
+        current = self._current_device
+        if current is not None and self._device_db.get_device(current.device_id) is not current:
+            current = None  # deleted on another workstation
+        if current is not None:
+            # Objects are updated in place: only what shows them needs redrawing.
+            # The slices chosen in the viewer are the user's, they are left alone.
+            self._current_device = current
+            self._load_device_config(current, apply_slices=False)
+            self._refresh_device_combo()
+        elif self._current_image is not None:
+            # Its installation may just have been created elsewhere
+            self._current_device = None
+            self._try_auto_detect_device()
+            self._refresh_device_combo()
+        else:
+            self._select_device(self._default_device())
+        self._update_results_display()
+        self.statusbar.showMessage(
+            "Base de données des installations mise à jour depuis un autre poste", 6000)
 
     def dragEnterEvent(self, event):
         """Accept drag events containing folders or files."""
@@ -2824,6 +3002,15 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
         # Update results display to show comparison
         self._update_results_display()
 
+    def _toggle_csv_format(self, checked: bool):
+        """Choose the format of the history CSV export: English when checked, else French."""
+        get_app_config().csv_format = "en" if checked else "fr"
+        try:
+            save_app_config()
+        except OSError as e:
+            QMessageBox.warning(self, "Configuration",
+                                f"Le réglage n'a pas pu être enregistré :\n{e}")
+
     def _toggle_theme(self, checked: bool):
         """Toggle between dark and light theme."""
         config = get_app_config()
@@ -3076,6 +3263,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             artifacts_present=self._artifact_result,
             artifacts_description=self._artifact_description if self._artifact_result else "",
             hu_slice_index=self.image_viewer.get_hu_slice_index(),
+            num_slices=self._current_series.num_images if self._current_series is not None else None,
             roi_geometry=(self._current_results.geometry.to_dict()
                           if self._current_results.geometry is not None else None),
             nps_start_slice=nps_start if self._nps_results is not None else None,
@@ -3103,6 +3291,13 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         # the phantom was not found: a default geometry must never be frozen.
         if self._current_device.roi_geometry is None and not self._phantom_warnings():
             self._freeze_roi_geometry(self._run_geometry(run))
+        # Slices saved before their series length was recorded: this control
+        # used them, so its series has the length they were chosen on
+        device = self._current_device
+        if device.slices_series_length is None and device.hu_slice_index is not None \
+                and (device.hu_slice_index, device.nps_start_slice, device.nps_end_slice) \
+                == (run.hu_slice_index, run.nps_start_slice, run.nps_end_slice):
+            device.slices_series_length = run.num_slices
         try:
             replaced = self._device_db.add_run(self._current_device.device_id, run)
         except (OSError, LookupError) as e:
@@ -3122,12 +3317,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         status bar. `geometry` is the ROI geometry of the reference control; it
         is frozen on the device with the values. Returns True when applied.
         """
-        nps_text = f" et f SPB = {format_fr(nps_freq, 3)} c/mm" if nps_freq is not None else ""
-        if not ask(
-                self, "Valeurs de référence",
-                f"Définir σ = {format_fr(noise, 2)} UH{nps_text} ({source}) "
-                "comme valeurs de référence de cette installation ?",
-                "Définir comme références", "Annuler"):
+        old_noise, old_nps_freq = self._reference_values()
+        installation = (self._current_device.display_name() if self._current_device is not None
+                        else "cette installation")
+        text, accept = reference_question(installation, old_noise, old_nps_freq,
+                                          noise, nps_freq, source, geometry is not None)
+        if not ask(self, "Valeurs de référence", text, accept, "Annuler"):
             return False
 
         self._edit_ref_noise.setText(format_fr(noise, 2))
@@ -3180,6 +3375,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             return
         device.hu_slice_index = self.image_viewer.get_hu_slice_index()
         device.nps_start_slice, device.nps_end_slice = self.image_viewer.get_nps_slice_range()
+        device.slices_series_length = self._current_series.num_images
         try:
             self._device_db.save_device(device)
         except OSError as e:
@@ -3187,6 +3383,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             return
         self._saved_hu_slice = device.hu_slice_index
         self._saved_nps_start, self._saved_nps_end = device.nps_start_slice, device.nps_end_slice
+        self._saved_slices_mismatch = None
         self._check_slice_values_modified()
         self.statusbar.showMessage("Coupes mémorisées pour cette installation", 5000)
 
@@ -3942,7 +4139,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
         modified = ""
         current, saved_slices, differs = self._slice_selection_state()
         save_link = f'<a href="save-slices" style="color:{c["accent"]};">mémoriser ces coupes</a>'
-        if differs:
+        if self._saved_slices_mismatch is not None and current:
+            saved_length, length = self._saved_slices_mismatch
+            slice_line = (f'<br>Coupes {current} — <span style="color:{c["warning_border"]};">les coupes '
+                          f"mémorisées n'ont pas été appliquées : elles ont été choisies sur une série de "
+                          f'{saved_length} coupes, celle-ci en compte {length}</span> — {save_link}')
+        elif differs:
             slice_line = (f'<br><span style="color:{c["warning_border"]};">Coupes {current} ≠ enregistrées '
                           f'({saved_slices})</span> — {save_link}')
         elif current and saved_slices is None and self._current_device is not None:
@@ -3963,8 +4165,12 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                              f"{date_link}modifier</a>")
         self._install_summary.setText(f"{saved}<br>{ref_line}{modified}{slice_line}{date_line}")
 
-    def _load_device_config(self, device: DeviceConfig | None):
-        """Load device configuration into the UI fields."""
+    def _load_device_config(self, device: DeviceConfig | None, apply_slices: bool = True):
+        """Load device configuration into the UI fields.
+
+        `apply_slices` moves the viewer to the slices saved for the device; it
+        is off when the device is merely redrawn after a database refresh.
+        """
         self._refresh_history(device)
         if device is not None:
             self._remember_device(device)
@@ -3982,6 +4188,7 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_hu_slice = None
             self._saved_nps_start = None
             self._saved_nps_end = None
+            self._saved_slices_mismatch = None
         else:
             # Load device values (skip placeholder-like values from old configs)
             def load_value(edit, value):
@@ -4008,8 +4215,18 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             self._saved_hu_slice = device.hu_slice_index
             self._saved_nps_start = device.nps_start_slice
             self._saved_nps_end = device.nps_end_slice
+            self._saved_slices_mismatch = None
+            saved_length = device.slices_series_length
+            if self._current_series is not None and saved_length is not None \
+                    and saved_length != self._current_series.num_images \
+                    and device.hu_slice_index is not None:
+                # Slice numbers chosen on a series of another length do not
+                # designate the same place in this one (the decision asks for
+                # the central slice): they are not applied, and the summary says so
+                self._saved_slices_mismatch = (saved_length, self._current_series.num_images)
+                self._saved_hu_slice = self._saved_nps_start = self._saved_nps_end = None
             # Apply slice values if they exist and we have a series loaded
-            if self._current_series is not None:
+            elif self._current_series is not None:
                 # A slice saved for a longer series can never be reached here: compare
                 # against what the viewer can actually show, or the "modified" state
                 # and the reset button would stay on for good
@@ -4020,9 +4237,9 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
                     lo = max(0, min(self._saved_nps_start, last))
                     hi = max(0, min(self._saved_nps_end, last))
                     self._saved_nps_start, self._saved_nps_end = min(lo, hi), max(lo, hi)
-                if device.hu_slice_index is not None:
+                if apply_slices and device.hu_slice_index is not None:
                     self.image_viewer.set_hu_slice_index(device.hu_slice_index)
-                if device.nps_start_slice is not None and device.nps_end_slice is not None:
+                if apply_slices and device.nps_start_slice is not None and device.nps_end_slice is not None:
                     self.image_viewer.set_nps_slice_range(device.nps_start_slice, device.nps_end_slice)
 
     def _try_auto_detect_device(self):
@@ -4062,6 +4279,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
 
     def _show_device_manager(self):
         """Open the installations window, then take its changes into account."""
+        # Edit the installations as they are now, not as they were at startup
+        self._refresh_database(force=True)
         current_slices = None
         if self._current_series is not None:
             start, end = self.image_viewer.get_nps_slice_range()
@@ -4076,6 +4295,8 @@ du contrôle de qualité des tomodensitomètres. L'auteur ne garantit pas les r�
             select_device_id=self._current_device.device_id if self._current_device else None,
             current_image=self._current_image,
             current_slices=current_slices,
+            current_series_length=(self._current_series.num_images
+                                   if self._current_series is not None else None),
             current_analysis=self._current_analysis_for_reference(),
             image_device_id=image_device_id)
         dialog.exec()

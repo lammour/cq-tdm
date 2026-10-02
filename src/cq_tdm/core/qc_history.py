@@ -104,6 +104,7 @@ class QCRun:
     hu_slice_index: int | None = None
     nps_start_slice: int | None = None
     nps_end_slice: int | None = None
+    num_slices: int | None = None  # number of slices of the series
     # ROI sizes and offsets used (core.roi_geometry.ROIGeometry.to_dict())
     roi_geometry: dict | None = None
     # Corrective action after a non-conformity (ANSM register: date of the

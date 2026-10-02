@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -19,7 +20,17 @@ def atomic_write_json(path: Path, data) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_name, path)
+        # On Windows the swap is refused while another process has the target
+        # open, e.g. another workstation reading a shared database: a read
+        # lasts milliseconds, so try again briefly before giving up
+        for attempt in range(10):
+            try:
+                os.replace(tmp_name, path)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.05)
     except BaseException:
         try:
             os.unlink(tmp_name)

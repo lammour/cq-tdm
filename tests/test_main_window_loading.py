@@ -266,3 +266,67 @@ def test_reference_from_an_undated_control_asks_its_date_first(window, tmp_path,
     device = window._current_device
     assert device.reference_noise == pytest.approx(window._nps_results.noise)
     assert device.roi_geometry.frozen_date == "2026-09-15"
+
+
+# --- saved slices and series length (P-17) ------------------------------------
+
+def _installation_with_saved_slices(window, folder, hu, start, end, length):
+    """Create the installation of the series in `folder` with slices saved for `length` slices."""
+    device = DeviceConfig.from_dicom("ACME", "CT 9000", "ST1", "SN42")
+    device.hu_slice_index, device.nps_start_slice, device.nps_end_slice = hu, start, end
+    device.slices_series_length = length
+    window._device_db.save_device(device)
+    return device
+
+
+def test_saved_slices_apply_to_a_series_of_the_same_length(window, tmp_path, shown):
+    _installation_with_saved_slices(window, tmp_path, hu=3, start=1, end=10, length=12)
+    phantom_series(tmp_path, count=12)
+    assert window._load_dicom_folder(str(tmp_path)) is True
+    assert window.image_viewer.get_hu_slice_index() == 3
+    assert window.image_viewer.get_nps_slice_range() == (1, 10)
+    assert window._saved_slices_mismatch is None
+    assert "n'ont pas été appliquées" not in window._install_summary.text()
+
+
+def test_saved_slices_are_not_applied_to_a_series_of_another_length(window, tmp_path, shown):
+    """Slice 4 of 12 is not slice 4 of 20: the decision asks for the central slice."""
+    _installation_with_saved_slices(window, tmp_path, hu=3, start=1, end=10, length=12)
+    phantom_series(tmp_path, count=20)
+    assert window._load_dicom_folder(str(tmp_path)) is True
+
+    # The default (central) slices stay, and the summary says why
+    assert window.image_viewer.get_hu_slice_index() == 9
+    assert window.image_viewer.get_nps_slice_range() == (5, 14)
+    assert window._saved_slices_mismatch == (12, 20)
+    summary = window._install_summary.text()
+    assert "n'ont pas été appliquées" in summary
+    assert "une série de 12 coupes, celle-ci en compte 20" in summary
+    assert not window._btn_reset_slices.isEnabled()  # nothing valid to go back to
+
+    # Saving the slices of this series records its length
+    window._save_current_slices()
+    device = window._current_device
+    assert (device.hu_slice_index, device.slices_series_length) == (9, 20)
+    assert window._saved_slices_mismatch is None
+    assert "n'ont pas été appliquées" not in window._install_summary.text()
+
+
+def test_slices_saved_before_the_length_was_recorded_still_apply(window, tmp_path, shown, monkeypatch):
+    """Installations saved by earlier versions: applied as before, length learnt at the next control."""
+    device = _installation_with_saved_slices(window, tmp_path / "x", hu=3, start=1, end=10, length=None)
+    folder = phantom_series(tmp_path / "dicom", count=12)
+    assert window._load_dicom_folder(str(folder)) is True
+    assert window.image_viewer.get_hu_slice_index() == 3
+    analyse(window)
+
+    window._artifact_result = False
+    window._edit_ref_noise.setText("25,0")
+    window._edit_ref_nps_freq.setText("0,500")
+    pdf = tmp_path / "rapport.pdf"
+    monkeypatch.setattr(mw.ExportDialog, "exec", lambda dialog: mw.QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(mw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(pdf), ""))
+    monkeypatch.setattr("PySide6.QtGui.QDesktopServices.openUrl", lambda url: True)
+    window._export_pdf()
+    assert device.runs[-1].num_slices == 12
+    assert device.slices_series_length == 12  # learnt from the control that used them
