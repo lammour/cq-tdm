@@ -135,7 +135,7 @@ def test_resolve_after_move_via_relocation(archive: Path, tmp_path: Path):
 def test_resolve_via_path_relative_to_database(archive: Path, tmp_path: Path):
     db = tmp_path / "cfg" / "devices.json"
     rel = relative_to_database(archive / "2026" / "S1", db)
-    assert rel == str(Path("..") / "data" / "2026" / "S1")
+    assert rel == "../data/2026/S1"  # "/" on every platform
     # Database and archive moved together: absolute path is stale, relative one resolves
     new_root = tmp_path / "usb"
     (new_root / "cfg").mkdir(parents=True)
