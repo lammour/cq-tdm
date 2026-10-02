@@ -1421,6 +1421,15 @@ class MainWindow(QMainWindow):
         config_menu = menubar.addMenu("&Configuration")
         config_menu.addAction("Gestion des installations…", self._show_device_manager)
         config_menu.addAction("Rapports…", self._show_report_settings)
+        config_menu.addSeparator()
+        self._csv_english_action = config_menu.addAction(
+            "Export CSV au format anglais (virgule, point décimal)")
+        self._csv_english_action.setCheckable(True)
+        self._csv_english_action.setChecked(get_app_config().csv_format == "en")
+        self._csv_english_action.setToolTip(
+            "Décoché : colonnes séparées par « ; » et virgule décimale, pour un tableur en français")
+        self._csv_english_action.triggered.connect(self._toggle_csv_format)
+        config_menu.setToolTipsVisible(True)
 
         # Help menu
         help_menu = menubar.addMenu("&Aide")
@@ -2823,6 +2832,15 @@ cliniquement gênants avec le fenêtrage ANSM (centre 0 UH, largeur 80 UH)</li>
 
         # Update results display to show comparison
         self._update_results_display()
+
+    def _toggle_csv_format(self, checked: bool):
+        """Choose the format of the history CSV export: English when checked, else French."""
+        get_app_config().csv_format = "en" if checked else "fr"
+        try:
+            save_app_config()
+        except OSError as e:
+            QMessageBox.warning(self, "Configuration",
+                                f"Le réglage n'a pas pu être enregistré :\n{e}")
 
     def _toggle_theme(self, checked: bool):
         """Toggle between dark and light theme."""

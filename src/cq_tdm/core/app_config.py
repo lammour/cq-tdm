@@ -31,6 +31,10 @@ class AppConfig:
     last_performed_by: str = ""
     last_validated_by: str = ""
 
+    # CSV export of the history: "fr" (";" between columns, decimal comma, what a
+    # French spreadsheet opens as numbers) or "en" ("," and decimal point)
+    csv_format: str = "fr"
+
     # UI settings
     theme: str = "dark"  # "dark" or "light"
 
@@ -106,6 +110,8 @@ class AppConfig:
                 setattr(config, f.name, value)
         if config.theme not in ("dark", "light"):
             config.theme = "dark"
+        if config.csv_format not in ("fr", "en"):
+            config.csv_format = "fr"
         config.report_logo_scale = min(1.0, max(0.1, config.report_logo_scale))
         return config
 

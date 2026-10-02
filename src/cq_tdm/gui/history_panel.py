@@ -404,20 +404,31 @@ class HistoryPanel(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Exporter l'historique", "historique_cq.csv", "CSV (*.csv)")
         if not path:
             return
+        # French by default: ";" between columns and a decimal comma, which a
+        # French spreadsheet opens as numbers. The "en" format ("," and decimal
+        # point) is for the other locales and for scripts.
+        english = get_app_config().csv_format == "en"
+
+        def number(value: float | None, decimals: int) -> str:
+            """A value rounded as on screen, "" when it was not measured."""
+            if value is None:
+                return ""
+            text = f"{value:.{decimals}f}"
+            return text if english else text.replace(".", ",")
+
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                w = csv.writer(f, delimiter=";")
+                w = csv.writer(f, delimiter="," if english else ";")
                 w.writerow(["date", "kV", "mAs", "ct_eau_UH", "uniformite_UH", "bruit_UH", "bruit_ref_UH",
                             "f_spb_cmm", "f_spb_ref_cmm", "artefacts", "statut",
                             "action_corrective_date", "action_corrective", "notes", "pdf"])
                 for run in sorted(self._runs, key=lambda r: (r.run_date, r.recorded_at)):
                     st = evaluate_run(run)
                     w.writerow([
-                        run.run_date, run.kvp, run.mas, run.water_ct, run.uniformity,
-                        "" if run.noise is None else run.noise,
-                        "" if run.ref_noise is None else run.ref_noise,
-                        "" if run.nps_freq is None else run.nps_freq,
-                        "" if run.ref_nps_freq is None else run.ref_nps_freq,
+                        run.run_date, number(run.kvp, 0), number(run.mas, 0),
+                        number(run.water_ct, 1), number(run.uniformity, 1),
+                        number(run.noise, 2), number(run.ref_noise, 2),
+                        number(run.nps_freq, 3), number(run.ref_nps_freq, 3),
                         "" if run.artifacts_present is None else int(run.artifacts_present),
                         STATUS_SHORT[st["overall"]], run.corrective_action_date, run.corrective_action,
                         run.notes, run.pdf_path,
